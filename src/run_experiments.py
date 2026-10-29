@@ -1,20 +1,19 @@
-"""Run the project's plain-Python notebook cells and persist reproducible outputs.
+"""Run both notebooks from top to bottom and save their outputs.
 
-Usage: python src/run_experiments.py [--notebook all|synthetic|real]
-No notebook execution library or IPython extension is required.
+The script displays no windows. It saves figures, executed notebooks, result
+arrays and a short environment record. Run it from the repository root with
+python src/run_experiments.py; Jupyter is not required.
 """
 from __future__ import annotations
 
 import argparse
 import base64
 import contextlib
-import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import platform
-import re
 import sys
 import time
 
@@ -98,10 +97,13 @@ def run_notebook(path: Path, kind: str):
                 "all_real_baseline", "mean_real_baseline", "median_real_baseline",
                 "median_real_ls", "median_real_ridge", "mean_real_ls", "mean_real_ridge",
                 "N_REAL_REPETITIONS", "D_VALUES_NOISE", "NOISE_LEVELS", "noise_results"]
+    extension_key = "gd_results" if kind == "synthetic" else "ridge_cv_results"
+    extension_file = "gradient_descent.json" if kind == "synthetic" else "ridge_cv.json"
+    (ROOT / "results" / extension_file).write_text(
+        json.dumps(serializable(env[extension_key]), indent=2, allow_nan=False) + "\n")
     elapsed = time.perf_counter() - start
     result = {key: env[key] for key in keys}
     result["runtime_seconds"] = elapsed
-    result["notebook_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     (ROOT / "results" / f"{kind}.json").write_text(
         json.dumps(serializable(result), indent=2, allow_nan=False) + "\n")
     print(f"Finished {kind} in {elapsed:.1f} seconds", flush=True)
@@ -120,27 +122,10 @@ def main():
     for kind, name in targets.items():
         if args.notebook in ("all", kind):
             timings[kind] = run_notebook(ROOT / "notebooks" / name, kind)
-    manifest = []
-    for notebook_path in sorted((ROOT / "notebooks").glob("*.ipynb")):
-        document = json.loads(notebook_path.read_text())
-        for index, cell in enumerate(document["cells"], start=1):
-            for stem in re.findall(r'save_and_show\("([^"\n]+)"\)', "".join(cell["source"])):
-                exports = sorted((ROOT / "figures").glob(stem + ".*"))
-                exports += sorted((ROOT / "figures").glob(stem + "_[0-9]*.*"))
-                manifest.append({"notebook": notebook_path.name, "cell": index,
-                                 "stem": stem, "exports": [str(p.relative_to(ROOT)) for p in exports]})
-    (ROOT / "results" / "figure_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    # Hash only the actual training and held-out test data used, not other dates.
-    data_dir = ROOT / "data" / "blogfeedback"
-    checksums = {}
-    for name in ["blogData_train.csv", "blogData_test-2012.03.31.01_00.csv"]:
-        path = data_dir / name
-        if path.exists():
-            checksums[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     metadata = {
         "python": platform.python_version(), "numpy": np.__version__,
         "matplotlib": matplotlib.__version__, "platform": platform.platform(),
-        "timings_seconds": timings, "dataset_sha256": checksums,
+        "timings_seconds": timings,
         "command": "python src/run_experiments.py " + " ".join(sys.argv[1:]),
     }
     (ROOT / "results" / "environment.json").write_text(json.dumps(metadata, indent=2) + "\n")

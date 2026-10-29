@@ -1,0 +1,26 @@
+{
+  "python": "3.13.7",
+  "numpy": "2.5.4",
+  "matplotlib": "3.11.2",
+  "platform": "macOS-13.0-arm64-arm-64bit-Mach-O",
+  "timings_seconds": {
+    "synthetic": 17.17085437499918,
+    "real": 18.663935958058573
+  },
+  "command": "python src/run_experiments.py ",
+  "installation": "Installed requirements.txt into a new venv from PyPI, then ran both notebooks successfully.",
+  "max_absolute_difference_from_saved_run": {
+    "synthetic.json": 1.5363184502348304e-08,
+    "real.json": 1731.2945367780349,
+    "gradient_descent.json": 1.113065195568197e-11,
+    "ridge_cv.json": 4.533262654149439e-11
+  },
+  "report_pdf_rebuilt": false,
+  "largest_original_real_difference": {
+    "path": "/real_repetition_results/17/ls_test/81",
+    "saved": 4342.925166573466,
+    "fresh": 6074.219703351501,
+    "absolute": 1731.2945367780349,
+    "relative": 0.39864710313302787
+  }
+}

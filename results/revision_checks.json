@@ -1,0 +1,10 @@
+{
+  "original_fields_equal_exactly": 37,
+  "test_perturbation_leaves_cv_selection_unchanged": true,
+  "report_pdf_rebuilt": false,
+  "declaration_verbatim": true,
+  "report_tex_check_pages": 10,
+  "report_tex_check_output": "Temporary XDV only; no new report PDF",
+  "existing_report_pdf_unchanged": true,
+  "new_figures_visually_checked": true
+}

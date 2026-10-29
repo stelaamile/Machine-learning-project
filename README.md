@@ -1,12 +1,14 @@
 # Double Descent in Linear Models
 
-Stela Mile · Statistical Methods for Machine Learning · Assignment 4 · A.Y. 2025/26
+Stela Mile — Statistical Methods for Machine Learning, Assignment 4, A.Y. 2025/26
 
-This project compares minimum-norm least squares and ridge regression as the number of features grows with a fixed training sample size. Both algorithms are implemented using NumPy linear algebra, without estimator classes. Experiments use noisy synthetic linear data and the UCI BlogFeedback regression dataset.
+## Overview
 
-## Reproduce the experiments
+I study how training and test errors change when the number of features increases while the training sample size stays fixed. The project compares minimum-norm least squares and ridge regression on synthetic linear data and the real-world BlogFeedback dataset. It also examines gradient descent, early stopping, label noise, and training-only selection of ridge strength.
 
-The verified environment is Python **3.13.7**, NumPy **2.4.6**, and Matplotlib **3.11.0**. The runner uses only the standard library plus the two pinned packages.
+The algorithms are implemented from scratch using NumPy matrix operations. There are no scikit-learn estimators, `lstsq`, or `pinv` solvers.
+
+## How to reproduce
 
 From the repository root:
 
@@ -17,75 +19,81 @@ python -m pip install -r requirements.txt
 python src/run_experiments.py
 ```
 
-On Windows activate the environment with `.venv\Scripts\activate` instead. Python 3.13 is the tested interpreter; identical floating-point results on other Python/BLAS builds are not guaranteed, particularly for ill-conditioned real-world fits.
+On Windows, activate with `.venv\Scripts\activate`. Python 3.13 is the tested interpreter. NumPy and Matplotlib use compatible version ranges; `results/environment.json` records the actual versions used for the saved results. A separate fresh-environment check is recorded in `results/fresh_environment.json`. Ill-conditioned least-squares fits can differ substantially across numerical libraries. In the fresh environment, one individual near-threshold test MSE differed by about 40%; the original saved results are retained. Ridge/CV differences were negligible.
 
-The command runs both notebooks in order, embeds fresh outputs, exports PNG and vector PDF figures to `figures/`, and writes numerical arrays to `results/synthetic.json` and `results/real.json`. `results/environment.json` records versions, platform, run times, and SHA-256 checksums for the two CSVs actually used. It stops with an exception on a failed cell and only replaces each executed notebook after all its cells succeed. If running one notebook only, the environment file describes that latest invocation.
-
-To run only one experiment:
+The runner executes both notebooks from top to bottom, saves their outputs, exports figures to `figures/`, and saves numerical arrays to `results/`. It sets the working directory automatically. To run one notebook only:
 
 ```sh
 python src/run_experiments.py --notebook synthetic
 python src/run_experiments.py --notebook real
 ```
 
-The notebooks also run interactively: install JupyterLab separately if desired, open a notebook, select the environment above, and **Restart Kernel and Run All**. Use `notebooks/` as the working directory. Figure saving is built into the notebooks. The command-line runner handles the working directory automatically and does not require Jupyter.
+For interactive work, install JupyterLab separately, open a notebook with `notebooks/` as its working directory, and use **Restart Kernel and Run All**. The notebooks import the new extension functions from `src/extensions.py`.
 
 ## Data
 
-BlogFeedback is attributed to Krisztian Buza (2014), UCI Machine Learning Repository, DOI [10.24432/C58S3F](https://doi.org/10.24432/C58S3F), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+BlogFeedback: Krisztian Buza (2014), UCI Machine Learning Repository, [DOI: 10.24432/C58S3F](https://doi.org/10.24432/C58S3F), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
-The real-world notebook downloads [the official archive](https://archive.ics.uci.edu/static/public/304/blogfeedback.zip) only when it is absent, and extracts it if the expected training CSV or complete 60-file test collection is missing. Internet access is required on the first run if local data are absent. A complete local dataset allows offline execution. Generated data are not needed in Git.
+The real-world notebook downloads the [official archive](https://archive.ics.uci.edu/static/public/304/blogfeedback.zip) if needed. A complete cached dataset permits offline execution.
 
-- Official training CSV: 52,397 rows and 280 predictors plus the target.
-- Training subset: 80 observations, fixed seed 42 for illustration; seeds 0–19 for repetitions.
-- Held-out test CSV: `blogData_test-2012.03.31.01_00.csv`, 214 observations.
-- Training-only standardization and constant-column removal; target is `log1p(comment count)`.
-- Other test dates are not pooled. The same later test set is reused in every repetition.
+- Training pool: 52,397 observations with 280 predictors.
+- Each experiment samples 80 training observations without replacement.
+- Fixed official test file: `blogData_test-2012.03.31.01_00.csv`, 214 observations.
+- Target: `log1p(comment count)`; preprocessing uses training statistics only.
+- The same later test date is reused in every repetition; other dates are not pooled.
 
 ## Experimental settings
 
-Synthetic data: 150 training observations, 1,000 independent test observations, 400 full features, Gaussian noise standard deviation 0.5, and normalized exponentially decaying coefficient magnitudes. Thirty paired seeds (0–29) are used for least squares and all ridge strengths (0.01, 0.1, 1, 10). A noise extension uses standard deviations 0.1, 0.5 and 1 with seed 42; this is a single-seed diagnostic, not a repeated robustness study.
+**Original synthetic experiment:** 150 training and 1,000 test observations, 400 Gaussian features, normalized coefficients with magnitudes decaying as `exp(-0.02*j)`, and Gaussian label noise with standard deviation 0.5. Models use nested prefixes of fixed feature matrices. Thirty seeds (0–29) are paired across least squares and ridge strengths 0.01, 0.1, 1 and 10.
 
-Real-world data: each run fixes n=80 and varies the prefix of a random feature ordering after training-only preprocessing. SVD fitting and rank diagnostics use a relative cutoff of 1e-10; interpolation is declared when the relative training residual is below 1e-8. Ridge uses alpha=1 in the unnormalized squared-error objective. The repeated plots compare dimensions supported by every run (1–149 in the verified run), with the median, descriptive interquartile range, and a separately fitted training-mean baseline. No hyperparameter is selected using the test curves.
+**Gradient descent:** the original seed-42 dataset and dimension sweep, zero initialization, 20/200/2,000 iterations, and step size `0.9/(s_max**2 + alpha)` for half the unnormalized squared-error objective. Separate training-only convergence checks compare coefficients with the closed form, up to 20,000 iterations. The checks report the measured norm difference and do not label a capped run as converged.
 
-## Main findings
+**Original real-world experiment:** seed 42 for illustration and seeds 0–19 for repetitions; ridge alpha=1. SVD fitting/rank cutoff is `1e-10` relative to the largest singular value. Interpolation requires relative training residual below `1e-8`. The repeated curves use effective dimensions available in all runs (1–149).
 
-- Synthetic least squares exhibits a clear interpolation spike and second descent; the large model does not beat the best pre-interpolation model in this setup.
-- Ridge suppresses the spike on exactly the same synthetic data.
-- All 20 real-world repetitions reach interpolation, but test performance is unstable. The median curve falls after a large peak; the seed-42 illustration does not show a convincing second descent.
-- At the final common real-world dimension, ridge loses to the training-mean baseline in all 20 runs. Improvement over unstable least squares is not sufficient evidence of useful prediction.
+**Ridge/CV extension:** five strengths (0.01, 0.1, 1, 10, 100), five inner folds, and fixed raw feature prefixes 10, 20, 40, 60, 80, 100, 120, 160, 200, 240 and 280. Every fold fits its own constant-column mask, scaler and target mean. Alpha is selected from inner validation MSE separately at each fixed dimension. This extension counts raw columns before filtering, so its x-axis differs from the original effective-feature axis. At all 280 raw columns, the alpha=1 fit matches the original full-feature fit. No test values enter selection.
 
-IQR bands describe variation across training subsets and feature orderings, not confidence intervals or uncertainty across independent test dates. Synthetic raw-target MSE and real-world log-target MSE have different scales and should not be compared numerically.
+**Noise extension:** seed 42, standard deviations 0.1, 0.5 and 1; a single-seed diagnostic rather than a repeated noise study.
+
+## Findings
+
+- Synthetic least squares shows a clear interpolation spike and second descent. The largest model still does not beat the best pre-interpolation error in this setup.
+- Ridge suppresses the spike on the same data. Early-stopped GD also suppresses slowly learned singular directions. Near interpolation, unregularized GD may converge extremely slowly.
+- All 20 original real-world repetitions interpolate, but test performance is unstable. A median peak and decline do not amount to a clean full double-descent curve.
+- At the original common effective dimension 149, alpha=1 ridge loses to its baseline in all 20 runs.
+- At the CV extension's final raw dimension 280, CV ridge has median test MSE about 3.557 versus 1.147 for the baseline and beats its paired baseline in only 1/20 runs. Stronger regularization helps but does not establish reliable prediction.
+
+IQR bands show variability across training subsets and feature orderings, not confidence intervals over independent test dates. Synthetic raw-label MSE and real-world log-target MSE are different scales.
 
 ## Files
 
-- `notebooks/01_synthetic_double_descent.ipynb`: synthetic least squares, paired ridge comparison, regularization sensitivity.
-- `notebooks/02_real_world_double_descent.ipynb`: BlogFeedback, interpolation diagnostics, paired baselines, repeated experiments, noise extension.
-- `src/run_experiments.py`: headless execution and output capture.
-- `figures/`: exported PNG/PDF figures; `results/figure_manifest.json` links these to notebook cells.
-- `results/`: machine-readable numerical evidence and environment record.
-- `report/report.tex`: standalone LaTeX source with plots embedded as vector drawing commands derived from the numerical results; no external figure files or BibTeX step are needed.
-- `report/report.pdf`: compiled report.
+- `notebooks/01_synthetic_double_descent.ipynb`: synthetic experiments, paired ridge comparison and GD.
+- `notebooks/02_real_world_double_descent.ipynb`: original real-world experiments, noise and ridge/CV extension.
+- `src/extensions.py`: GD, fold-local preprocessing and ridge cross-validation.
+- `src/run_experiments.py`: runs notebooks and saves outputs and environment information.
+- `figures/`: PNG/PDF exports referenced by the report.
+- `results/`: original experiments, GD, CV, environment and verification records.
+- `report/report.tex`: manually maintained LaTeX source using ordinary figure files.
+- `report/report.pdf`: previous compiled version; not refreshed for this source revision.
+- `NOTES_FOR_ORAL.md`: short explanations for preparing the oral exam.
 
-## Rebuild the report
+The unused `start.py` import stub and the report-source generator have been removed. Edit `report.tex` directly; regenerating it is no longer part of the workflow.
 
-With a TeX distribution providing `pdflatex`:
+## Report
+
+From the repository root, when ready to rebuild:
 
 ```sh
-python report/build_source.py
 cd report
 pdflatex -interaction=nonstopmode -halt-on-error report.tex
 pdflatex -interaction=nonstopmode -halt-on-error report.tex
 ```
 
-The report's embedded plot coordinates and numerical summaries are a snapshot of the verified run. `build_source.py` reads the result JSON files to generate the plot coordinates. It checks key expected results and stops if the setup has materially changed; update the narrative and checks when changing the experiments rather than recompiling an outdated interpretation. The LaTeX source can also be opened in Codex's built-in LaTeX editor.
+The report reads figures from `../figures/`. Re-run the experiments first if changing their settings, and update the written interpretation when results change. No additional generator or BibTeX step is required. The current source passed a ten-page TeX/XDV check with the external figures, without exporting a new report PDF. A final two-pass pdflatex build and visual PDF review remain for the PDF stage.
 
-## Sources and authorship review
+## References and use of AI tools
 
 - Belkin, Hsu, Ma and Mandal (2019), [Reconciling modern machine-learning practice and the classical bias–variance trade-off](https://doi.org/10.1073/pnas.1903070116).
 - Buza (2014), [BlogFeedback](https://doi.org/10.24432/C58S3F).
-- Course project brief and course notes supplied by the student.
+- Supplied course notes and Assignment 4 project brief.
 
-Codex assisted with code review, revisions, execution, visualizations, and report drafting. The report acknowledges this assistance and reproduces the course's required declaration as **text for the author to review**, not a signed certification. Review the report, verify all claims, and ensure the declaration and acknowledgment meet the course's rules before submission.
-
-Publication to the public repository and submission of its URL are separate final steps. No submission or new publication is performed by this package.
+AI tools (Codex) were used for code review, implementation revisions, experiment execution, numerical checks, plotting, and report drafting. This assistance is acknowledged separately from the course declaration in the report.
