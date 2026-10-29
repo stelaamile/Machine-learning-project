@@ -1,0 +1,1659 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=23mm,top=20mm,bottom=20mm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,booktabs,xcolor,hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!45!black,pdftitle={Double Descent in Linear Models},pdfauthor={Stela Mile}}
+\definecolor{bluecurve}{RGB}{30,105,165}
+\definecolor{orangecurve}{RGB}{224,110,25}
+\definecolor{greencurve}{RGB}{28,128,82}
+\definecolor{blueband}{RGB}{205,225,240}
+\definecolor{orangeband}{RGB}{251,226,204}
+\definecolor{grid}{RGB}{220,224,228}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.2}
+\newcommand{\pageheading}[1]{\section*{#1}}
+\begin{document}
+{\Large\bfseries Double Descent in Linear Models}\par
+{\large Minimum-norm least squares and ridge regression}\par
+\textbf{Stela Mile}\quad |\quad Statistical Methods for Machine Learning\par
+Assignment 4\quad |\quad A.Y. 2025/26\quad |\quad 29 October 2026
+
+\pageheading{1. Research question and main findings}
+Classical accounts of generalization emphasize a trade-off: increasing model complexity can reduce approximation error while increasing estimation error. Beyond the capacity needed to fit the training set exactly, test error can decline again. This is the double-descent phenomenon discussed by Belkin et al.\ [1]. This project investigates that behavior in linear regression by holding the number of training observations fixed and varying the number of available features.
+
+\textbf{Abstract.} Minimum-norm least squares and ridge regression are implemented with explicit NumPy linear algebra and evaluated on noisy synthetic linear data and a real-world BlogFeedback regression task. The synthetic experiment exhibits a pronounced interpolation spike followed by a second descent. Ridge substantially suppresses that spike. The real-world experiment reaches numerical interpolation, but its predictive performance is unstable. Across repeated subsets, a median peak and decline coexist with weak performance against a constant baseline. These findings support a distinction between identifying interpolation, observing a second descent, and achieving useful prediction.
+
+\begin{center}
+\begin{tabular}{p{0.23\linewidth}p{0.32\linewidth}p{0.32\linewidth}}
+\toprule
+ & Synthetic data & BlogFeedback \\
+\midrule
+Fixed training size & 150 & 80 \\
+Test observations & 1,000 per run & 214, fixed later date \\
+Repeated seeds & 0--29 & 0--19 \\
+Observed interpolation & At $d=150$ & $d=80$--$93$ in repetitions \\
+Main pattern & Clear double descent & Mixed evidence; high instability \\
+Regularization & Suppresses the spike & Improves on unstable least squares \\
+Practical caveat & Largest model is not best & Final ridge models lose to baseline \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\textbf{Scope.} The experiments are diagnostic sweeps, not a model-selection exercise. The test curves are used to study behavior, not to choose the dimension or regularization strength for deployment. No claim is made that these linear experiments reproduce the models or full empirical scope of the reference paper.
+
+\textbf{Evidence.} Every numerical statement below is derived from the executed notebooks and accompanying JSON results. Linear and logarithmic views are retained in the repository; the report uses logarithmic error plots where large spikes would otherwise obscure the ridge and baseline curves.
+
+\newpage
+\pageheading{2. Models, loss, and numerical interpolation}
+For a design matrix $X\in\mathbb{R}^{n\times d}$ and labels $y\in\mathbb{R}^n$, least squares minimizes the unnormalized sum of squared errors:
+\[
+\widehat w\in\arg\min_w\|Xw-y\|_2^2.
+\]
+When the minimizer is not unique, the implementation chooses the solution with smallest Euclidean norm. Given a reduced singular value decomposition $X=U\Sigma V^\top$, it computes
+\[
+\widehat w=V_K\Sigma_K^{-1}U_K^\top y,
+\qquad K=\{j:s_j>10^{-10}s_1\}.
+\]
+The cutoff prevents division by numerically negligible singular values. This is a truncated numerical pseudoinverse; the numerical rank, and hence the fitted solution, depends on the stated tolerance. The real-world diagnostic table uses the same retained singular values as the solver, rather than a separate default rank threshold.
+
+Ridge regression minimizes
+\[
+\|Xw-y\|_2^2+\alpha\|w\|_2^2,\qquad\alpha>0,
+\]
+and solves the linear system
+\[
+(X^\top X+\alpha I)\widehat w_\alpha=X^\top y.
+\]
+The code uses \texttt{numpy.linalg.solve}, not an explicit matrix inverse. The objective uses the sum of errors, so $\alpha$ is not the penalty coefficient of an objective normalized by $1/n$. Its spectral action replaces the factor $1/s_j$ by $s_j/(s_j^2+\alpha)$, limiting the amplification associated with small singular values. The implementation and normalization match the ridge formulation in the supplied course notes [3].
+
+\textbf{Error metric.} Both train and test errors are means:
+\[
+\operatorname{MSE}(y,\widehat y)=\frac{1}{m}\sum_{i=1}^m(y_i-\widehat y_i)^2.
+\]
+Synthetic MSE is on the original label scale. BlogFeedback MSE is on $\log(1+y)$; centering does not change the error when the training mean is restored to predictions.
+
+\textbf{Interpolation diagnostic.} The real-world implementation evaluates
+\[
+\rho_d=\frac{\|y-X_d\widehat w_d\|_2}
+{\max(\|y\|_2,\epsilon_{\rm machine})}
+\]
+and records the first dimension with $\rho_d<10^{-8}$. Interpolation is therefore observed from the training residual, not inferred from a large parameter count or a test-error spike. Centering the real-world columns restricts their rank to at most $n-1$; a centered target can still be interpolated if it lies in their column space. Neither $d=n$ nor rank alone is a sufficient diagnostic in rank-deficient data.
+
+\newpage
+\pageheading{3. Datasets and evaluation protocol}
+\textbf{Synthetic regression.} Each run draws independent standard Gaussian feature matrices with 150 training rows, 1,000 test rows, and 400 columns. Labels are generated once from all 400 features:
+\[
+y=X\beta+\varepsilon,\quad\varepsilon\sim\mathcal N(0,\sigma^2I),
+\qquad \beta_j\propto s_j e^{-0.02j},\ j=0,\ldots,399,
+\]
+where $s_j\in\{-1,1\}$ are random signs and $\|\beta\|_2=1$. Thus the population signal variance is one. The main experiment uses $\sigma=0.5$, corresponding to noise variance 0.25.
+
+The models take prefixes of the same matrices. Labels, noise, and coefficient vector do not change as $d$ varies within a run. Early features deliberately carry more signal, so adding features initially reduces omitted-variable error. Thirty seeds generate independent problems. Least squares and all four ridge strengths, $\alpha\in\{0.01,0.1,1,10\}$, use identical data within each seed. A dense set of dimensions near 150 resolves the interpolation spike; the sweep continues to 400.
+
+\textbf{Real-world regression.} BlogFeedback [2] provides a training file with 52,397 observations and 280 predictors. The target is a future comment count. The experiment uses the final provided test file, dated 31 March 2012, containing 214 observations. This preserves the official separation of training and test files, while limiting the evaluation to one test date. The other 59 test files are not pooled.
+
+For each run, 80 observations are sampled without replacement from the official training file. The target is transformed with $\log(1+y)$ because of its skew. Predictors are randomly ordered, standardized using only the selected training rows, and columns with zero training variance are removed. Targets are centered with the training mean; this is equivalent to fitting an unpenalized intercept. All preprocessing is applied unchanged to the held-out file.
+
+\textbf{Why a small fixed sample?} The aim is to cross interpolation within the available feature set, rather than to train the most accurate predictor. An earlier $n=150$ setup remained rank deficient and did not interpolate. Reducing the fixed size to 80 made interpolation accessible. This was an exploratory design revision, not an independent confirmatory experiment. Seed 42 is retained for illustration; seeds 0--19 provide repeated diagnostics without replacing unfavorable runs.
+
+Every usable dimension is evaluated in each real-world run. Unsupported dimensions are stored as missing values, not silently truncated. Aggregate plots use only dimensions available in all 20 runs, namely 1--149 in the verified execution. Ridge uses $\alpha=1$. The baseline predicts the mean of that run's training log-targets and never uses the test mean.
+
+\newpage
+\pageheading{4. Synthetic results: a clear interpolation spike}
+\begin{center}\setlength{\unitlength}{1pt}%
+\begin{picture}(460,222)%
+\put(48,211){\small\bfseries Synthetic data: paired means across 30 seeds}%
+\put(0,190){\scriptsize Test MSE (log scale)}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,53.83)(244,53.83)(440,53.83)}%
+\put(42,51.83){\makebox(0,0)[r]{\scriptsize $10^{0}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,91.75)(244,91.75)(440,91.75)}%
+\put(42,89.75){\makebox(0,0)[r]{\scriptsize $10^{1}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,129.67)(244,129.67)(440,129.67)}%
+\put(42,127.67){\makebox(0,0)[r]{\scriptsize $10^{2}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,167.59)(244,167.59)(440,167.59)}%
+\put(42,165.59){\makebox(0,0)[r]{\scriptsize $10^{3}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48.00,34)(48.00,106.5)(48.00,179)}%
+\put(48.00,22){\makebox(0,0){\scriptsize 0}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(146.00,34)(146.00,106.5)(146.00,179)}%
+\put(146.00,22){\makebox(0,0){\scriptsize 100}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(195.00,34)(195.00,106.5)(195.00,179)}%
+\put(195.00,22){\makebox(0,0){\scriptsize 150}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(244.00,34)(244.00,106.5)(244.00,179)}%
+\put(244.00,22){\makebox(0,0){\scriptsize 200}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(342.00,34)(342.00,106.5)(342.00,179)}%
+\put(342.00,22){\makebox(0,0){\scriptsize 300}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(440.00,34)(440.00,106.5)(440.00,179)}%
+\put(440.00,22){\makebox(0,0){\scriptsize 400}}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(57.80,53.86)(62.70,52.24)(67.60,50.62)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(67.60,50.62)(77.40,48.42)(87.20,46.23)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(87.20,46.23)(97.00,45.70)(106.80,45.17)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(106.80,45.17)(116.60,45.76)(126.40,46.35)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(126.40,46.35)(136.20,48.19)(146.00,50.03)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(146.00,50.03)(155.80,54.65)(165.60,59.27)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(165.60,59.27)(170.50,62.75)(175.40,66.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(175.40,66.22)(180.30,72.29)(185.20,78.36)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(185.20,78.36)(187.65,86.74)(190.10,95.12)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(190.10,95.12)(191.57,103.41)(193.04,111.71)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(193.04,111.71)(193.53,117.54)(194.02,123.37)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(194.02,123.37)(194.51,148.69)(195.00,174.02)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(195.00,174.02)(195.49,147.28)(195.98,120.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(195.98,120.54)(196.47,116.73)(196.96,112.91)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(196.96,112.91)(198.43,102.64)(199.90,92.37)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(199.90,92.37)(202.35,86.69)(204.80,81.01)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(204.80,81.01)(209.70,74.89)(214.60,68.77)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(214.60,68.77)(219.50,66.15)(224.40,63.52)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(224.40,63.52)(234.20,60.85)(244.00,58.17)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(244.00,58.17)(268.50,56.38)(293.00,54.60)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(293.00,54.60)(317.50,54.29)(342.00,53.97)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(342.00,53.97)(366.50,54.00)(391.00,54.03)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(391.00,54.03)(415.50,54.14)(440.00,54.24)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(57.80,53.84)(62.70,52.21)(67.60,50.58)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(67.60,50.58)(77.40,48.34)(87.20,46.11)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(87.20,46.11)(97.00,45.52)(106.80,44.93)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(106.80,44.93)(116.60,45.39)(126.40,45.86)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(126.40,45.86)(136.20,47.40)(146.00,48.94)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(146.00,48.94)(155.80,52.03)(165.60,55.12)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(165.60,55.12)(170.50,56.99)(175.40,58.86)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(175.40,58.86)(180.30,60.28)(185.20,61.71)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(185.20,61.71)(187.65,62.17)(190.10,62.64)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(190.10,62.64)(191.57,62.89)(193.04,63.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(193.04,63.14)(193.53,63.05)(194.02,62.97)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(194.02,62.97)(194.51,62.89)(195.00,62.81)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(195.00,62.81)(195.49,62.97)(195.98,63.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(195.98,63.14)(196.47,63.05)(196.96,62.97)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(196.96,62.97)(198.43,62.84)(199.90,62.71)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(199.90,62.71)(202.35,62.58)(204.80,62.45)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(204.80,62.45)(209.70,61.69)(214.60,60.94)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(214.60,60.94)(219.50,60.08)(224.40,59.22)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(224.40,59.22)(234.20,57.95)(244.00,56.69)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(244.00,56.69)(268.50,55.48)(293.00,54.27)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(293.00,54.27)(317.50,54.06)(342.00,53.86)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(342.00,53.86)(366.50,53.92)(391.00,53.98)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(391.00,53.98)(415.50,54.09)(440.00,54.21)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,34)(195.00,36)(195.00,38)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,41)(195.00,43)(195.00,45)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,48)(195.00,50)(195.00,52)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,55)(195.00,57)(195.00,59)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,62)(195.00,64)(195.00,66)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,69)(195.00,71)(195.00,73)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,76)(195.00,78)(195.00,80)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,83)(195.00,85)(195.00,87)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,90)(195.00,92)(195.00,94)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,97)(195.00,99)(195.00,101)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,104)(195.00,106)(195.00,108)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,111)(195.00,113)(195.00,115)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,118)(195.00,120)(195.00,122)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,125)(195.00,127)(195.00,129)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,132)(195.00,134)(195.00,136)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,139)(195.00,141)(195.00,143)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,146)(195.00,148)(195.00,150)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,153)(195.00,155)(195.00,157)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,160)(195.00,162)(195.00,164)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,167)(195.00,169)(195.00,171)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,174)(195.00,176)(195.00,178)}%
+{\color{bluecurve}\linethickness{1.3pt}\qbezier(48,199)(55,199)(62,199)}%
+{\color{black}\put(67,196){\scriptsize Least squares}}%
+{\color{orangecurve}\linethickness{1.3pt}\qbezier(178,199)(185,199)(192,199)}%
+{\color{black}\put(197,196){\scriptsize Ridge, alpha=1}}%
+\linethickness{0.6pt}\put(48,34){\line(1,0){392}}\put(48,34){\line(0,1){145}}%
+\put(244,5){\makebox(0,0){\scriptsize Number of features ($d$)}}%
+\end{picture}\end{center}
+{\small\textit{Figure 1.} Mean errors on the same 30 synthetic problems. The dashed line marks $d=n=150$. The log scale preserves the ridge curve without hiding the least-squares peak.}
+
+\begin{center}\begin{tabular}{rrr}\toprule
+$d$ & Mean least-squares MSE & Mean ridge MSE ($\alpha=1$)\\\midrule
+10 & 1.002 & 1.001 \\
+60 & 0.591 & 0.583 \\
+150 & 1,477.947 & 1.725 \\
+200 & 1.302 & 1.190 \\
+400 & 1.026 & 1.024 \\
+\bottomrule\end{tabular}\end{center}
+The least-squares curve initially falls, rises toward interpolation, and declines again as additional features are introduced. The mean test error at $d=150$ is about 1,477.95, compared with about 1.026 at $d=400$. Training error reaches numerical zero in the interpolating regime. This is a clear empirical instance of double descent under the specified data-generating process.
+
+However, the best observed pre-interpolation mean is about 0.591 at $d=60$, below the final error. A second descent does not imply that the largest model is the best model. Once the informative early features have been included, adding further coordinates also changes the bias of the minimum-norm solution.
+
+Ridge with $\alpha=1$ lowers mean error at $d=150$ to about 1.725. At $d=400$, ridge and least squares are nearly identical, about 1.024 and 1.026. Its largest benefit here is near the ill-conditioned interpolation transition. The four-strength sensitivity plot in the notebook shows that stronger regularization suppresses the spike more aggressively; those test curves are descriptive, not a tuning procedure.
+
+Means near the interpolation threshold can be sensitive to extreme realizations. The notebook therefore also displays interquartile ranges. An empirical mean need not lie inside the middle-50\% band; the band is not a confidence interval for that mean.
+
+\newpage
+\pageheading{5. Real-world interpolation and an unstable illustration}
+\begin{center}\setlength{\unitlength}{1pt}%
+\begin{picture}(460,222)%
+\put(48,211){\small\bfseries BlogFeedback: training interpolation diagnostic}%
+\put(0,190){\scriptsize Relative training residual (log scale)}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,34.00)(244,34.00)(440,34.00)}%
+\put(42,32.00){\makebox(0,0)[r]{\scriptsize $10^{-13}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,45.15)(244,45.15)(440,45.15)}%
+\put(42,43.15){\makebox(0,0)[r]{\scriptsize $10^{-12}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,56.31)(244,56.31)(440,56.31)}%
+\put(42,54.31){\makebox(0,0)[r]{\scriptsize $10^{-11}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,67.46)(244,67.46)(440,67.46)}%
+\put(42,65.46){\makebox(0,0)[r]{\scriptsize $10^{-10}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,78.62)(244,78.62)(440,78.62)}%
+\put(42,76.62){\makebox(0,0)[r]{\scriptsize $10^{-9}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,89.77)(244,89.77)(440,89.77)}%
+\put(42,87.77){\makebox(0,0)[r]{\scriptsize $10^{-8}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,100.92)(244,100.92)(440,100.92)}%
+\put(42,98.92){\makebox(0,0)[r]{\scriptsize $10^{-7}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,112.08)(244,112.08)(440,112.08)}%
+\put(42,110.08){\makebox(0,0)[r]{\scriptsize $10^{-6}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,123.23)(244,123.23)(440,123.23)}%
+\put(42,121.23){\makebox(0,0)[r]{\scriptsize $10^{-5}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,134.38)(244,134.38)(440,134.38)}%
+\put(42,132.38){\makebox(0,0)[r]{\scriptsize $10^{-4}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,145.54)(244,145.54)(440,145.54)}%
+\put(42,143.54){\makebox(0,0)[r]{\scriptsize $10^{-3}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,156.69)(244,156.69)(440,156.69)}%
+\put(42,154.69){\makebox(0,0)[r]{\scriptsize $10^{-2}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,167.85)(244,167.85)(440,167.85)}%
+\put(42,165.85){\makebox(0,0)[r]{\scriptsize $10^{-1}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,179.00)(244,179.00)(440,179.00)}%
+\put(42,177.00){\makebox(0,0)[r]{\scriptsize $10^{0}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48.00,34)(48.00,106.5)(48.00,179)}%
+\put(48.00,22){\makebox(0,0){\scriptsize 0}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(146.00,34)(146.00,106.5)(146.00,179)}%
+\put(146.00,22){\makebox(0,0){\scriptsize 40}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(244.00,34)(244.00,106.5)(244.00,179)}%
+\put(244.00,22){\makebox(0,0){\scriptsize 80}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(342.00,34)(342.00,106.5)(342.00,179)}%
+\put(342.00,22){\makebox(0,0){\scriptsize 120}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(440.00,34)(440.00,106.5)(440.00,179)}%
+\put(440.00,22){\makebox(0,0){\scriptsize 160}}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(50.45,178.91)(51.67,178.91)(52.90,178.91)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(52.90,178.91)(54.12,178.86)(55.35,178.81)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(55.35,178.81)(56.58,178.60)(57.80,178.39)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(57.80,178.39)(59.02,178.39)(60.25,178.39)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(60.25,178.39)(61.48,178.36)(62.70,178.34)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(62.70,178.34)(63.93,178.33)(65.15,178.33)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(65.15,178.33)(66.38,178.33)(67.60,178.33)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(67.60,178.33)(68.82,178.33)(70.05,178.33)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(70.05,178.33)(71.28,178.32)(72.50,178.31)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(72.50,178.31)(73.72,178.31)(74.95,178.31)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(74.95,178.31)(76.18,178.27)(77.40,178.24)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(77.40,178.24)(78.62,178.23)(79.85,178.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(79.85,178.22)(81.07,178.13)(82.30,178.03)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(82.30,178.03)(83.53,178.02)(84.75,178.01)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(84.75,178.01)(85.97,177.97)(87.20,177.92)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(87.20,177.92)(88.43,177.62)(89.65,177.32)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(89.65,177.32)(90.88,177.32)(92.10,177.32)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(92.10,177.32)(93.32,176.98)(94.55,176.63)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(94.55,176.63)(95.78,176.31)(97.00,175.99)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(97.00,175.99)(98.22,175.99)(99.45,175.99)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(99.45,175.99)(100.68,175.92)(101.90,175.86)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(101.90,175.86)(103.12,175.85)(104.35,175.85)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(104.35,175.85)(105.57,175.78)(106.80,175.71)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(106.80,175.71)(108.03,175.70)(109.25,175.68)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(109.25,175.68)(110.47,175.42)(111.70,175.16)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(111.70,175.16)(112.93,175.16)(114.15,175.16)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(114.15,175.16)(115.38,175.16)(116.60,175.16)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(116.60,175.16)(117.82,175.09)(119.05,175.02)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(119.05,175.02)(120.28,175.00)(121.50,174.98)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(121.50,174.98)(122.72,174.98)(123.95,174.98)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(123.95,174.98)(125.18,174.94)(126.40,174.90)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(126.40,174.90)(127.62,174.83)(128.85,174.76)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(128.85,174.76)(130.07,174.74)(131.30,174.71)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(131.30,174.71)(132.53,174.71)(133.75,174.71)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(133.75,174.71)(134.97,174.60)(136.20,174.49)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(136.20,174.49)(137.43,174.49)(138.65,174.49)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(138.65,174.49)(139.88,174.41)(141.10,174.33)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(141.10,174.33)(142.32,174.33)(143.55,174.32)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(143.55,174.32)(144.78,174.31)(146.00,174.29)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(146.00,174.29)(147.22,174.29)(148.45,174.29)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(148.45,174.29)(149.68,174.29)(150.90,174.28)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(150.90,174.28)(152.12,174.10)(153.35,173.92)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(153.35,173.92)(154.57,173.90)(155.80,173.87)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(155.80,173.87)(157.03,173.80)(158.25,173.73)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(158.25,173.73)(159.47,173.73)(160.70,173.73)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(160.70,173.73)(161.93,173.71)(163.15,173.69)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(163.15,173.69)(164.38,173.69)(165.60,173.69)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(165.60,173.69)(166.82,173.58)(168.05,173.46)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(168.05,173.46)(169.28,173.41)(170.50,173.36)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(170.50,173.36)(171.72,173.33)(172.95,173.30)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(172.95,173.30)(174.18,173.20)(175.40,173.10)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(175.40,173.10)(176.62,173.10)(177.85,173.10)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(177.85,173.10)(179.07,173.10)(180.30,173.09)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(180.30,173.09)(181.53,173.06)(182.75,173.03)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(182.75,173.03)(183.97,172.92)(185.20,172.82)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(185.20,172.82)(186.43,172.76)(187.65,172.71)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(187.65,172.71)(188.88,172.55)(190.10,172.39)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(190.10,172.39)(191.32,172.39)(192.55,172.39)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(192.55,172.39)(193.78,172.33)(195.00,172.28)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(195.00,172.28)(196.22,171.90)(197.45,171.52)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(197.45,171.52)(198.68,171.46)(199.90,171.41)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(199.90,171.41)(201.12,170.99)(202.35,170.58)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(202.35,170.58)(203.57,170.57)(204.80,170.57)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(204.80,170.57)(206.03,170.54)(207.25,170.51)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(207.25,170.51)(208.47,169.77)(209.70,169.03)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(209.70,169.03)(210.93,168.80)(212.15,168.56)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(212.15,168.56)(213.38,168.56)(214.60,168.56)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(214.60,168.56)(215.82,168.56)(217.05,168.56)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(217.05,168.56)(218.28,168.47)(219.50,168.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(219.50,168.38)(220.72,168.32)(221.95,168.26)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(221.95,168.26)(223.18,168.25)(224.40,168.25)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(224.40,168.25)(225.62,168.22)(226.85,168.20)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(226.85,168.20)(228.07,168.14)(229.30,168.08)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(229.30,168.08)(230.53,167.91)(231.75,167.73)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(231.75,167.73)(232.97,167.70)(234.20,167.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(234.20,167.66)(235.43,167.66)(236.65,167.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(236.65,167.66)(237.88,167.66)(239.10,167.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(239.10,167.66)(240.32,167.66)(241.55,167.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(241.55,167.66)(242.78,167.66)(244.00,167.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(244.00,167.66)(245.22,167.66)(246.45,167.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(246.45,167.66)(247.68,167.66)(248.90,167.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(248.90,167.66)(250.12,167.66)(251.35,167.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(251.35,167.66)(252.57,167.64)(253.80,167.62)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(253.80,167.62)(255.03,167.62)(256.25,167.62)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(256.25,167.62)(257.48,167.62)(258.70,167.62)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(258.70,167.62)(259.92,167.62)(261.15,167.62)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(261.15,167.62)(262.38,167.62)(263.60,167.62)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(263.60,167.62)(264.83,167.62)(266.05,167.62)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(266.05,167.62)(267.27,167.58)(268.50,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(268.50,167.54)(269.73,167.54)(270.95,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(270.95,167.54)(272.17,167.54)(273.40,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(273.40,167.54)(274.62,167.54)(275.85,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(275.85,167.54)(277.08,167.54)(278.30,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(278.30,167.54)(279.52,167.54)(280.75,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(280.75,167.54)(281.98,167.54)(283.20,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(283.20,167.54)(284.42,167.54)(285.65,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(285.65,167.54)(286.88,167.54)(288.10,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(288.10,167.54)(289.33,167.54)(290.55,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(290.55,167.54)(291.77,167.54)(293.00,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(293.00,167.54)(294.23,167.54)(295.45,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(295.45,167.54)(296.67,167.54)(297.90,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(297.90,167.54)(299.12,167.54)(300.35,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(300.35,167.54)(301.58,167.54)(302.80,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(302.80,167.54)(304.02,167.54)(305.25,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(305.25,167.54)(306.48,167.54)(307.70,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(307.70,167.54)(308.92,167.54)(310.15,167.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(310.15,167.54)(311.38,167.46)(312.60,167.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(312.60,167.38)(313.83,167.38)(315.05,167.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(315.05,167.38)(316.27,167.38)(317.50,167.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(317.50,167.38)(318.73,167.38)(319.95,167.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(319.95,167.38)(321.17,167.38)(322.40,167.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(322.40,167.38)(323.62,167.38)(324.85,167.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(324.85,167.38)(326.08,167.38)(327.30,167.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(327.30,167.38)(328.52,167.30)(329.75,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(329.75,167.22)(330.98,167.22)(332.20,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(332.20,167.22)(333.42,167.22)(334.65,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(334.65,167.22)(335.88,167.22)(337.10,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(337.10,167.22)(338.33,167.22)(339.55,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(339.55,167.22)(340.77,167.22)(342.00,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(342.00,167.22)(343.23,167.22)(344.45,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(344.45,167.22)(345.67,167.22)(346.90,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(346.90,167.22)(348.12,167.22)(349.35,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(349.35,167.22)(350.58,167.22)(351.80,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(351.80,167.22)(353.02,167.22)(354.25,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(354.25,167.22)(355.48,167.22)(356.70,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(356.70,167.22)(357.92,167.22)(359.15,167.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(359.15,167.22)(360.38,166.50)(361.60,165.79)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(361.60,165.79)(362.83,165.79)(364.05,165.79)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(364.05,165.79)(365.27,165.79)(366.50,165.79)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(366.50,165.79)(367.73,165.79)(368.95,165.79)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(368.95,165.79)(370.17,165.79)(371.40,165.79)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(371.40,165.79)(372.62,110.58)(373.85,55.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(373.85,55.38)(375.08,55.11)(376.30,54.85)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(376.30,54.85)(377.52,54.69)(378.75,54.53)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(378.75,54.53)(379.98,54.15)(381.20,53.76)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(381.20,53.76)(382.42,54.51)(383.65,55.26)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(383.65,55.26)(384.88,54.29)(386.10,53.32)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(386.10,53.32)(387.33,54.10)(388.55,54.88)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(388.55,54.88)(389.77,54.67)(391.00,54.45)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(391.00,54.45)(392.23,55.50)(393.45,56.55)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(393.45,56.55)(394.67,55.37)(395.90,54.19)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(395.90,54.19)(397.12,54.86)(398.35,55.53)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(398.35,55.53)(399.58,54.85)(400.80,54.18)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(400.80,54.18)(402.02,53.50)(403.25,52.82)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(403.25,52.82)(404.48,53.62)(405.70,54.41)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(405.70,54.41)(406.92,54.05)(408.15,53.68)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(408.15,53.68)(409.38,54.24)(410.60,54.79)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(410.60,54.79)(411.83,54.14)(413.05,53.50)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(413.05,53.50)(414.27,52.90)(415.50,52.30)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(415.50,52.30)(416.73,53.16)(417.95,54.02)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(417.95,54.02)(419.17,54.43)(420.40,54.84)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(420.40,54.84)(421.62,54.45)(422.85,54.07)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(422.85,54.07)(424.08,54.31)(425.30,54.55)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(425.30,54.55)(426.52,54.18)(427.75,53.80)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(50.45,89.77)(239.10,89.77)(427.75,89.77)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,34)(373.85,36)(373.85,38)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,41)(373.85,43)(373.85,45)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,48)(373.85,50)(373.85,52)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,55)(373.85,57)(373.85,59)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,62)(373.85,64)(373.85,66)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,69)(373.85,71)(373.85,73)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,76)(373.85,78)(373.85,80)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,83)(373.85,85)(373.85,87)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,90)(373.85,92)(373.85,94)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,97)(373.85,99)(373.85,101)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,104)(373.85,106)(373.85,108)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,111)(373.85,113)(373.85,115)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,118)(373.85,120)(373.85,122)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,125)(373.85,127)(373.85,129)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,132)(373.85,134)(373.85,136)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,139)(373.85,141)(373.85,143)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,146)(373.85,148)(373.85,150)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,153)(373.85,155)(373.85,157)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,160)(373.85,162)(373.85,164)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,167)(373.85,169)(373.85,171)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,174)(373.85,176)(373.85,178)}%
+{\color{bluecurve}\linethickness{1.3pt}\qbezier(48,199)(55,199)(62,199)}%
+{\color{black}\put(67,196){\scriptsize Relative residual}}%
+{\color{orangecurve}\linethickness{1.3pt}\qbezier(178,199)(185,199)(192,199)}%
+{\color{black}\put(197,196){\scriptsize Tolerance}}%
+\linethickness{0.6pt}\put(48,34){\line(1,0){392}}\put(48,34){\line(0,1){145}}%
+\put(244,5){\makebox(0,0){\scriptsize Number of features ($d$)}}%
+\end{picture}\end{center}
+{\small\textit{Figure 2.} The relative training residual falls below $10^{-8}$ at $d=133$ in the seed-42 run. The dashed vertical line marks that observed event.}
+\begin{center}\setlength{\unitlength}{1pt}%
+\begin{picture}(460,222)%
+\put(48,211){\small\bfseries BlogFeedback: seed 42}%
+\put(0,190){\scriptsize Test MSE (log scale)}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,34.00)(244,34.00)(440,34.00)}%
+\put(42,32.00){\makebox(0,0)[r]{\scriptsize $10^{0}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,52.12)(244,52.12)(440,52.12)}%
+\put(42,50.12){\makebox(0,0)[r]{\scriptsize $10^{1}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,70.25)(244,70.25)(440,70.25)}%
+\put(42,68.25){\makebox(0,0)[r]{\scriptsize $10^{2}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,88.38)(244,88.38)(440,88.38)}%
+\put(42,86.38){\makebox(0,0)[r]{\scriptsize $10^{3}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,106.50)(244,106.50)(440,106.50)}%
+\put(42,104.50){\makebox(0,0)[r]{\scriptsize $10^{4}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,124.62)(244,124.62)(440,124.62)}%
+\put(42,122.62){\makebox(0,0)[r]{\scriptsize $10^{5}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,142.75)(244,142.75)(440,142.75)}%
+\put(42,140.75){\makebox(0,0)[r]{\scriptsize $10^{6}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,160.88)(244,160.88)(440,160.88)}%
+\put(42,158.88){\makebox(0,0)[r]{\scriptsize $10^{7}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,179.00)(244,179.00)(440,179.00)}%
+\put(42,177.00){\makebox(0,0)[r]{\scriptsize $10^{8}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48.00,34)(48.00,106.5)(48.00,179)}%
+\put(48.00,22){\makebox(0,0){\scriptsize 0}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(146.00,34)(146.00,106.5)(146.00,179)}%
+\put(146.00,22){\makebox(0,0){\scriptsize 40}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(244.00,34)(244.00,106.5)(244.00,179)}%
+\put(244.00,22){\makebox(0,0){\scriptsize 80}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(342.00,34)(342.00,106.5)(342.00,179)}%
+\put(342.00,22){\makebox(0,0){\scriptsize 120}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(440.00,34)(440.00,106.5)(440.00,179)}%
+\put(440.00,22){\makebox(0,0){\scriptsize 160}}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(50.45,34.66)(51.67,34.67)(52.90,34.67)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(52.90,34.67)(54.12,34.75)(55.35,34.82)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(55.35,34.82)(56.58,35.01)(57.80,35.20)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(57.80,35.20)(59.02,35.85)(60.25,36.49)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(60.25,36.49)(61.48,36.49)(62.70,36.49)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(62.70,36.49)(63.93,36.35)(65.15,36.20)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(65.15,36.20)(66.38,36.24)(67.60,36.29)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(67.60,36.29)(68.82,36.22)(70.05,36.16)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(70.05,36.16)(71.28,36.26)(72.50,36.36)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(72.50,36.36)(73.72,36.44)(74.95,36.52)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(74.95,36.52)(76.18,45.25)(77.40,53.99)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(77.40,53.99)(78.62,51.47)(79.85,48.94)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(79.85,48.94)(81.07,50.88)(82.30,52.83)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(82.30,52.83)(83.53,53.22)(84.75,53.61)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(84.75,53.61)(85.97,53.13)(87.20,52.65)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(87.20,52.65)(88.43,54.27)(89.65,55.89)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(89.65,55.89)(90.88,55.90)(92.10,55.90)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(92.10,55.90)(93.32,59.80)(94.55,63.70)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(94.55,63.70)(95.78,63.05)(97.00,62.39)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(97.00,62.39)(98.22,62.39)(99.45,62.40)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(99.45,62.40)(100.68,61.80)(101.90,61.19)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(101.90,61.19)(103.12,61.35)(104.35,61.51)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(104.35,61.51)(105.57,61.18)(106.80,60.85)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(106.80,60.85)(108.03,61.70)(109.25,62.55)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(109.25,62.55)(110.47,63.74)(111.70,64.93)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(111.70,64.93)(112.93,64.93)(114.15,64.93)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(114.15,64.93)(115.38,64.95)(116.60,64.97)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(116.60,64.97)(117.82,64.87)(119.05,64.77)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(119.05,64.77)(120.28,64.88)(121.50,64.98)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(121.50,64.98)(122.72,64.88)(123.95,64.77)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(123.95,64.77)(125.18,66.26)(126.40,67.74)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(126.40,67.74)(127.62,67.83)(128.85,67.92)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(128.85,67.92)(130.07,67.88)(131.30,67.84)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(131.30,67.84)(132.53,67.84)(133.75,67.84)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(133.75,67.84)(134.97,67.96)(136.20,68.08)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(136.20,68.08)(137.43,68.13)(138.65,68.19)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(138.65,68.19)(139.88,68.79)(141.10,69.40)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(141.10,69.40)(142.32,69.35)(143.55,69.31)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(143.55,69.31)(144.78,69.28)(146.00,69.25)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(146.00,69.25)(147.22,69.26)(148.45,69.27)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(148.45,69.27)(149.68,69.16)(150.90,69.04)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(150.90,69.04)(152.12,70.16)(153.35,71.27)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(153.35,71.27)(154.57,71.35)(155.80,71.42)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(155.80,71.42)(157.03,71.87)(158.25,72.31)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(158.25,72.31)(159.47,72.31)(160.70,72.31)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(160.70,72.31)(161.93,72.35)(163.15,72.39)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(163.15,72.39)(164.38,72.37)(165.60,72.36)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(165.60,72.36)(166.82,73.07)(168.05,73.79)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(168.05,73.79)(169.28,74.21)(170.50,74.64)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(170.50,74.64)(171.72,74.68)(172.95,74.71)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(172.95,74.71)(174.18,74.28)(175.40,73.84)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(175.40,73.84)(176.62,73.71)(177.85,73.57)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(177.85,73.57)(179.07,73.89)(180.30,74.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(180.30,74.22)(181.53,73.91)(182.75,73.60)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(182.75,73.60)(183.97,74.73)(185.20,75.87)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(185.20,75.87)(186.43,77.60)(187.65,79.32)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(187.65,79.32)(188.88,79.87)(190.10,80.41)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(190.10,80.41)(191.32,80.42)(192.55,80.43)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(192.55,80.43)(193.78,79.34)(195.00,78.24)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(195.00,78.24)(196.22,77.97)(197.45,77.71)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(197.45,77.71)(198.68,77.67)(199.90,77.62)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(199.90,77.62)(201.12,80.47)(202.35,83.32)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(202.35,83.32)(203.57,83.33)(204.80,83.34)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(204.80,83.34)(206.03,84.67)(207.25,86.00)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(207.25,86.00)(208.47,87.85)(209.70,89.70)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(209.70,89.70)(210.93,90.18)(212.15,90.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(212.15,90.66)(213.38,90.66)(214.60,90.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(214.60,90.66)(215.82,90.66)(217.05,90.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(217.05,90.66)(218.28,90.86)(219.50,91.05)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(219.50,91.05)(220.72,90.44)(221.95,89.82)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(221.95,89.82)(223.18,89.86)(224.40,89.90)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(224.40,89.90)(225.62,90.98)(226.85,92.06)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(226.85,92.06)(228.07,91.07)(229.30,90.09)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(229.30,90.09)(230.53,91.32)(231.75,92.55)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(231.75,92.55)(232.97,93.39)(234.20,94.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(234.20,94.22)(235.43,106.06)(236.65,117.91)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(236.65,117.91)(237.88,114.43)(239.10,110.95)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(239.10,110.95)(240.32,102.76)(241.55,94.56)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(241.55,94.56)(242.78,94.43)(244.00,94.29)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(244.00,94.29)(245.22,92.40)(246.45,90.51)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(246.45,90.51)(247.68,90.74)(248.90,90.97)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(248.90,90.97)(250.12,90.98)(251.35,90.99)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(251.35,90.99)(252.57,91.04)(253.80,91.09)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(253.80,91.09)(255.03,91.11)(256.25,91.14)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(256.25,91.14)(257.48,91.12)(258.70,91.11)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(258.70,91.11)(259.92,91.78)(261.15,92.45)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(261.15,92.45)(262.38,92.02)(263.60,91.59)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(263.60,91.59)(264.83,91.58)(266.05,91.57)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(266.05,91.57)(267.27,92.43)(268.50,93.28)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(268.50,93.28)(269.73,93.61)(270.95,93.93)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(270.95,93.93)(272.17,95.64)(273.40,97.36)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(273.40,97.36)(274.62,95.30)(275.85,93.24)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(275.85,93.24)(277.08,93.69)(278.30,94.15)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(278.30,94.15)(279.52,94.79)(280.75,95.42)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(280.75,95.42)(281.98,95.50)(283.20,95.57)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(283.20,95.57)(284.42,95.56)(285.65,95.55)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(285.65,95.55)(286.88,95.57)(288.10,95.58)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(288.10,95.58)(289.33,95.56)(290.55,95.55)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(290.55,95.55)(291.77,96.44)(293.00,97.34)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(293.00,97.34)(294.23,96.73)(295.45,96.13)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(295.45,96.13)(296.67,96.40)(297.90,96.67)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(297.90,96.67)(299.12,96.28)(300.35,95.88)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(300.35,95.88)(301.58,96.81)(302.80,97.73)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(302.80,97.73)(304.02,97.79)(305.25,97.84)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(305.25,97.84)(306.48,97.84)(307.70,97.83)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(307.70,97.83)(308.92,97.82)(310.15,97.80)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(310.15,97.80)(311.38,98.42)(312.60,99.04)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(312.60,99.04)(313.83,98.76)(315.05,98.49)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(315.05,98.49)(316.27,99.53)(317.50,100.57)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(317.50,100.57)(318.73,100.73)(319.95,100.89)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(319.95,100.89)(321.17,100.90)(322.40,100.90)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(322.40,100.90)(323.62,103.28)(324.85,105.67)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(324.85,105.67)(326.08,106.35)(327.30,107.04)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(327.30,107.04)(328.52,113.42)(329.75,119.81)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(329.75,119.81)(330.98,119.64)(332.20,119.47)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(332.20,119.47)(333.42,119.44)(334.65,119.40)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(334.65,119.40)(335.88,120.60)(337.10,121.79)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(337.10,121.79)(338.33,118.21)(339.55,114.63)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(339.55,114.63)(340.77,114.69)(342.00,114.76)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(342.00,114.76)(343.23,113.81)(344.45,112.86)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(344.45,112.86)(345.67,112.97)(346.90,113.08)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(346.90,113.08)(348.12,113.08)(349.35,113.09)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(349.35,113.09)(350.58,112.97)(351.80,112.85)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(351.80,112.85)(353.02,113.56)(354.25,114.27)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(354.25,114.27)(355.48,112.45)(356.70,110.63)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(356.70,110.63)(357.92,110.37)(359.15,110.11)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(359.15,110.11)(360.38,114.18)(361.60,118.24)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(361.60,118.24)(362.83,118.24)(364.05,118.23)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(364.05,118.23)(365.27,118.71)(366.50,119.20)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(366.50,119.20)(367.73,117.81)(368.95,116.43)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(368.95,116.43)(370.17,116.45)(371.40,116.47)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(371.40,116.47)(372.62,144.50)(373.85,172.52)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(373.85,172.52)(375.08,172.47)(376.30,172.42)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(376.30,172.42)(377.52,172.39)(378.75,172.36)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(378.75,172.36)(379.98,172.69)(381.20,173.02)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(381.20,173.02)(382.42,172.15)(383.65,171.29)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(383.65,171.29)(384.88,171.26)(386.10,171.23)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(386.10,171.23)(387.33,171.23)(388.55,171.23)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(388.55,171.23)(389.77,171.24)(391.00,171.24)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(391.00,171.24)(392.23,171.25)(393.45,171.25)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(393.45,171.25)(394.67,171.29)(395.90,171.34)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(395.90,171.34)(397.12,171.45)(398.35,171.56)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(398.35,171.56)(399.58,171.56)(400.80,171.56)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(400.80,171.56)(402.02,171.56)(403.25,171.56)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(403.25,171.56)(404.48,171.94)(405.70,172.31)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(405.70,172.31)(406.92,172.59)(408.15,172.87)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(408.15,172.87)(409.38,172.90)(410.60,172.93)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(410.60,172.93)(411.83,172.52)(413.05,172.10)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(413.05,172.10)(414.27,172.25)(415.50,172.39)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(415.50,172.39)(416.73,172.41)(417.95,172.42)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(417.95,172.42)(419.17,172.43)(420.40,172.43)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(420.40,172.43)(421.62,172.47)(422.85,172.51)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(422.85,172.51)(424.08,172.50)(425.30,172.50)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(425.30,172.50)(426.52,172.44)(427.75,172.38)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(50.45,34.66)(51.67,34.67)(52.90,34.67)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(52.90,34.67)(54.12,34.74)(55.35,34.81)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(55.35,34.81)(56.58,34.99)(57.80,35.17)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(57.80,35.17)(59.02,35.77)(60.25,36.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(60.25,36.37)(61.48,36.40)(62.70,36.43)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(62.70,36.43)(63.93,36.28)(65.15,36.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(65.15,36.14)(66.38,36.15)(67.60,36.15)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(67.60,36.15)(68.82,36.11)(70.05,36.07)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(70.05,36.07)(71.28,36.22)(72.50,36.36)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(72.50,36.36)(73.72,36.43)(74.95,36.51)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(74.95,36.51)(76.18,45.09)(77.40,53.67)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(77.40,53.67)(78.62,51.41)(79.85,49.15)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(79.85,49.15)(81.07,50.73)(82.30,52.31)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(82.30,52.31)(83.53,52.60)(84.75,52.89)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(84.75,52.89)(85.97,52.90)(87.20,52.91)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(87.20,52.91)(88.43,54.83)(89.65,56.74)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(89.65,56.74)(90.88,56.75)(92.10,56.76)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(92.10,56.76)(93.32,59.80)(94.55,62.84)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(94.55,62.84)(95.78,62.37)(97.00,61.90)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(97.00,61.90)(98.22,61.90)(99.45,61.90)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(99.45,61.90)(100.68,61.19)(101.90,60.48)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(101.90,60.48)(103.12,60.51)(104.35,60.54)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(104.35,60.54)(105.57,60.50)(106.80,60.45)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(106.80,60.45)(108.03,60.49)(109.25,60.53)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(109.25,60.53)(110.47,60.91)(111.70,61.29)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(111.70,61.29)(112.93,61.33)(114.15,61.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(114.15,61.37)(115.38,61.40)(116.60,61.44)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(116.60,61.44)(117.82,61.67)(119.05,61.91)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(119.05,61.91)(120.28,62.25)(121.50,62.58)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(121.50,62.58)(122.72,62.65)(123.95,62.71)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(123.95,62.71)(125.18,62.98)(126.40,63.24)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(126.40,63.24)(127.62,63.32)(128.85,63.40)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(128.85,63.40)(130.07,63.37)(131.30,63.35)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(131.30,63.35)(132.53,63.42)(133.75,63.50)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(133.75,63.50)(134.97,63.49)(136.20,63.49)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(136.20,63.49)(137.43,63.53)(138.65,63.57)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(138.65,63.57)(139.88,64.03)(141.10,64.48)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(141.10,64.48)(142.32,64.47)(143.55,64.46)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(143.55,64.46)(144.78,64.40)(146.00,64.34)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(146.00,64.34)(147.22,63.99)(148.45,63.63)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(148.45,63.63)(149.68,63.50)(150.90,63.36)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(150.90,63.36)(152.12,63.45)(153.35,63.54)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(153.35,63.54)(154.57,63.47)(155.80,63.39)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(155.80,63.39)(157.03,63.42)(158.25,63.45)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(158.25,63.45)(159.47,63.45)(160.70,63.45)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(160.70,63.45)(161.93,63.66)(163.15,63.86)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(163.15,63.86)(164.38,63.86)(165.60,63.86)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(165.60,63.86)(166.82,63.85)(168.05,63.84)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(168.05,63.84)(169.28,63.99)(170.50,64.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(170.50,64.14)(171.72,64.25)(172.95,64.36)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(172.95,64.36)(174.18,64.15)(175.40,63.94)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(175.40,63.94)(176.62,63.93)(177.85,63.92)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(177.85,63.92)(179.07,64.41)(180.30,64.91)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(180.30,64.91)(181.53,64.96)(182.75,65.02)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(182.75,65.02)(183.97,65.73)(185.20,66.44)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(185.20,66.44)(186.43,66.32)(187.65,66.20)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(187.65,66.20)(188.88,66.19)(190.10,66.17)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(190.10,66.17)(191.32,66.13)(192.55,66.09)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(192.55,66.09)(193.78,66.19)(195.00,66.30)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(195.00,66.30)(196.22,66.35)(197.45,66.40)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(197.45,66.40)(198.68,66.17)(199.90,65.93)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(199.90,65.93)(201.12,66.04)(202.35,66.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(202.35,66.14)(203.57,66.19)(204.80,66.24)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(204.80,66.24)(206.03,66.03)(207.25,65.82)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(207.25,65.82)(208.47,65.99)(209.70,66.17)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(209.70,66.17)(210.93,66.14)(212.15,66.10)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(212.15,66.10)(213.38,66.09)(214.60,66.08)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(214.60,66.08)(215.82,66.08)(217.05,66.09)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(217.05,66.09)(218.28,66.06)(219.50,66.02)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(219.50,66.02)(220.72,66.08)(221.95,66.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(221.95,66.14)(223.18,66.02)(224.40,65.89)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(224.40,65.89)(225.62,65.45)(226.85,65.02)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(226.85,65.02)(228.07,64.93)(229.30,64.85)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(229.30,64.85)(230.53,64.85)(231.75,64.86)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(231.75,64.86)(232.97,64.86)(234.20,64.86)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(234.20,64.86)(235.43,64.88)(236.65,64.91)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(236.65,64.91)(237.88,64.94)(239.10,64.96)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(239.10,64.96)(240.32,64.98)(241.55,64.99)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(241.55,64.99)(242.78,64.60)(244.00,64.21)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(244.00,64.21)(245.22,64.29)(246.45,64.36)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(246.45,64.36)(247.68,64.37)(248.90,64.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(248.90,64.37)(250.12,64.37)(251.35,64.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(251.35,64.37)(252.57,64.64)(253.80,64.90)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(253.80,64.90)(255.03,64.97)(256.25,65.05)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(256.25,65.05)(257.48,65.04)(258.70,65.04)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(258.70,65.04)(259.92,65.00)(261.15,64.96)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(261.15,64.96)(262.38,65.10)(263.60,65.24)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(263.60,65.24)(264.83,65.23)(266.05,65.21)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(266.05,65.21)(267.27,63.46)(268.50,61.71)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(268.50,61.71)(269.73,62.01)(270.95,62.31)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(270.95,62.31)(272.17,62.29)(273.40,62.27)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(273.40,62.27)(274.62,62.31)(275.85,62.36)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(275.85,62.36)(277.08,62.33)(278.30,62.30)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(278.30,62.30)(279.52,62.28)(280.75,62.26)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(280.75,62.26)(281.98,62.33)(283.20,62.40)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(283.20,62.40)(284.42,62.41)(285.65,62.43)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(285.65,62.43)(286.88,62.43)(288.10,62.43)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(288.10,62.43)(289.33,62.40)(290.55,62.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(290.55,62.37)(291.77,62.34)(293.00,62.31)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(293.00,62.31)(294.23,62.34)(295.45,62.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(295.45,62.37)(296.67,62.35)(297.90,62.32)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(297.90,62.32)(299.12,62.44)(300.35,62.55)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(300.35,62.55)(301.58,62.57)(302.80,62.58)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(302.80,62.58)(304.02,62.53)(305.25,62.47)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(305.25,62.47)(306.48,62.45)(307.70,62.44)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(307.70,62.44)(308.92,62.45)(310.15,62.46)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(310.15,62.46)(311.38,62.51)(312.60,62.56)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(312.60,62.56)(313.83,62.49)(315.05,62.43)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(315.05,62.43)(316.27,62.18)(317.50,61.93)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(317.50,61.93)(318.73,62.07)(319.95,62.21)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(319.95,62.21)(321.17,62.00)(322.40,61.79)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(322.40,61.79)(323.62,61.82)(324.85,61.86)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(324.85,61.86)(326.08,62.04)(327.30,62.22)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(327.30,62.22)(328.52,62.18)(329.75,62.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(329.75,62.14)(330.98,62.17)(332.20,62.20)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(332.20,62.20)(333.42,62.18)(334.65,62.16)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(334.65,62.16)(335.88,62.20)(337.10,62.23)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(337.10,62.23)(338.33,62.20)(339.55,62.18)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(339.55,62.18)(340.77,62.17)(342.00,62.17)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(342.00,62.17)(343.23,62.27)(344.45,62.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(344.45,62.37)(345.67,62.22)(346.90,62.08)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(346.90,62.08)(348.12,62.05)(349.35,62.03)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(349.35,62.03)(350.58,62.16)(351.80,62.29)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(351.80,62.29)(353.02,61.82)(354.25,61.35)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(354.25,61.35)(355.48,61.21)(356.70,61.07)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(356.70,61.07)(357.92,61.08)(359.15,61.10)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(359.15,61.10)(360.38,61.47)(361.60,61.83)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(361.60,61.83)(362.83,61.84)(364.05,61.84)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(364.05,61.84)(365.27,61.87)(366.50,61.89)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(366.50,61.89)(367.73,61.85)(368.95,61.81)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(368.95,61.81)(370.17,61.85)(371.40,61.89)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(371.40,61.89)(372.62,59.66)(373.85,57.43)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(373.85,57.43)(375.08,57.40)(376.30,57.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(376.30,57.37)(377.52,57.35)(378.75,57.32)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(378.75,57.32)(379.98,57.34)(381.20,57.35)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(381.20,57.35)(382.42,57.38)(383.65,57.40)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(383.65,57.40)(384.88,57.39)(386.10,57.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(386.10,57.37)(387.33,57.37)(388.55,57.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(388.55,57.37)(389.77,57.41)(391.00,57.46)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(391.00,57.46)(392.23,56.83)(393.45,56.20)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(393.45,56.20)(394.67,56.29)(395.90,56.38)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(395.90,56.38)(397.12,55.82)(398.35,55.26)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(398.35,55.26)(399.58,55.24)(400.80,55.21)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(400.80,55.21)(402.02,55.21)(403.25,55.21)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(403.25,55.21)(404.48,55.21)(405.70,55.20)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(405.70,55.20)(406.92,54.68)(408.15,54.16)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(408.15,54.16)(409.38,54.16)(410.60,54.15)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(410.60,54.15)(411.83,54.17)(413.05,54.18)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(413.05,54.18)(414.27,54.16)(415.50,54.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(415.50,54.14)(416.73,54.09)(417.95,54.04)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(417.95,54.04)(419.17,54.08)(420.40,54.12)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(420.40,54.12)(421.62,54.17)(422.85,54.22)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(422.85,54.22)(424.08,54.22)(425.30,54.21)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(425.30,54.21)(426.52,54.31)(427.75,54.41)}%
+{\color{gray}\linethickness{1.05pt}\qbezier(50.45,35.00)(239.10,35.00)(427.75,35.00)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,34)(373.85,36)(373.85,38)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,41)(373.85,43)(373.85,45)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,48)(373.85,50)(373.85,52)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,55)(373.85,57)(373.85,59)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,62)(373.85,64)(373.85,66)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,69)(373.85,71)(373.85,73)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,76)(373.85,78)(373.85,80)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,83)(373.85,85)(373.85,87)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,90)(373.85,92)(373.85,94)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,97)(373.85,99)(373.85,101)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,104)(373.85,106)(373.85,108)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,111)(373.85,113)(373.85,115)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,118)(373.85,120)(373.85,122)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,125)(373.85,127)(373.85,129)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,132)(373.85,134)(373.85,136)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,139)(373.85,141)(373.85,143)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,146)(373.85,148)(373.85,150)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,153)(373.85,155)(373.85,157)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,160)(373.85,162)(373.85,164)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,167)(373.85,169)(373.85,171)}%
+{\color{black}\linethickness{0.7pt}\qbezier(373.85,174)(373.85,176)(373.85,178)}%
+{\color{bluecurve}\linethickness{1.3pt}\qbezier(48,199)(55,199)(62,199)}%
+{\color{black}\put(67,196){\scriptsize Least squares}}%
+{\color{orangecurve}\linethickness{1.3pt}\qbezier(178,199)(185,199)(192,199)}%
+{\color{black}\put(197,196){\scriptsize Ridge, alpha=1}}%
+{\color{gray}\linethickness{1.3pt}\qbezier(308,199)(315,199)(322,199)}%
+{\color{black}\put(327,196){\scriptsize Baseline}}%
+\linethickness{0.6pt}\put(48,34){\line(1,0){392}}\put(48,34){\line(0,1){145}}%
+\put(244,5){\makebox(0,0){\scriptsize Number of features ($d$)}}%
+\end{picture}\end{center}
+{\small\textit{Figure 3.} Test errors for the same seed-42 run. The baseline is fitted only to the training labels; all errors use the log-target scale.}
+
+The seed-42 subset retains 155 nonconstant predictors. Its final training MSE is approximately $4.12\times10^{-23}$, confirming numerical interpolation. Nevertheless, final test MSE is about $4.31\times10^7$ for least squares and 13.37 for ridge, versus 1.14 for the baseline. This run does not demonstrate a convincing second descent. It is retained because replacing it with a favorable seed would conceal important instability. Tiny training residuals alone do not establish good generalization.
+
+\newpage
+\pageheading{6. Real-world repetitions and baseline comparison}
+\begin{center}\setlength{\unitlength}{1pt}%
+\begin{picture}(460,222)%
+\put(48,211){\small\bfseries BlogFeedback: median and interquartile range}%
+\put(0,190){\scriptsize Test MSE (log scale)}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,34.00)(244,34.00)(440,34.00)}%
+\put(42,32.00){\makebox(0,0)[r]{\scriptsize $10^{0}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,61.35)(244,61.35)(440,61.35)}%
+\put(42,59.35){\makebox(0,0)[r]{\scriptsize $10^{1}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,88.71)(244,88.71)(440,88.71)}%
+\put(42,86.71){\makebox(0,0)[r]{\scriptsize $10^{2}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,116.06)(244,116.06)(440,116.06)}%
+\put(42,114.06){\makebox(0,0)[r]{\scriptsize $10^{3}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,143.41)(244,143.41)(440,143.41)}%
+\put(42,141.41){\makebox(0,0)[r]{\scriptsize $10^{4}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,170.77)(244,170.77)(440,170.77)}%
+\put(42,168.77){\makebox(0,0)[r]{\scriptsize $10^{5}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48.00,34)(48.00,106.5)(48.00,179)}%
+\put(48.00,22){\makebox(0,0){\scriptsize 0}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(126.40,34)(126.40,106.5)(126.40,179)}%
+\put(126.40,22){\makebox(0,0){\scriptsize 30}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(204.80,34)(204.80,106.5)(204.80,179)}%
+\put(204.80,22){\makebox(0,0){\scriptsize 60}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(283.20,34)(283.20,106.5)(283.20,179)}%
+\put(283.20,22){\makebox(0,0){\scriptsize 90}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(361.60,34)(361.60,106.5)(361.60,179)}%
+\put(361.60,22){\makebox(0,0){\scriptsize 120}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(440.00,34)(440.00,106.5)(440.00,179)}%
+\put(440.00,22){\makebox(0,0){\scriptsize 150}}%
+{\color{blueband}\put(49.88,35.53){\rule{1.46pt}{0.68pt}}}%
+{\color{blueband}\put(51.84,35.19){\rule{2.76pt}{1.76pt}}}%
+{\color{blueband}\put(54.46,35.25){\rule{2.76pt}{1.52pt}}}%
+{\color{blueband}\put(57.07,35.77){\rule{2.76pt}{2.41pt}}}%
+{\color{blueband}\put(59.68,35.50){\rule{2.76pt}{5.44pt}}}%
+{\color{blueband}\put(62.30,35.48){\rule{2.76pt}{5.17pt}}}%
+{\color{blueband}\put(64.91,35.56){\rule{2.76pt}{5.15pt}}}%
+{\color{blueband}\put(67.53,35.57){\rule{2.76pt}{4.79pt}}}%
+{\color{blueband}\put(70.14,35.57){\rule{2.76pt}{6.81pt}}}%
+{\color{blueband}\put(72.75,37.14){\rule{2.76pt}{8.23pt}}}%
+{\color{blueband}\put(75.37,37.38){\rule{2.76pt}{8.92pt}}}%
+{\color{blueband}\put(77.98,37.62){\rule{2.76pt}{9.25pt}}}%
+{\color{blueband}\put(80.59,38.11){\rule{2.76pt}{8.48pt}}}%
+{\color{blueband}\put(83.21,37.92){\rule{2.76pt}{8.95pt}}}%
+{\color{blueband}\put(85.82,37.80){\rule{2.76pt}{10.28pt}}}%
+{\color{blueband}\put(88.43,37.94){\rule{2.76pt}{10.55pt}}}%
+{\color{blueband}\put(91.05,38.56){\rule{2.76pt}{9.79pt}}}%
+{\color{blueband}\put(93.66,38.27){\rule{2.76pt}{12.34pt}}}%
+{\color{blueband}\put(96.27,38.42){\rule{2.76pt}{11.57pt}}}%
+{\color{blueband}\put(98.89,38.66){\rule{2.76pt}{10.13pt}}}%
+{\color{blueband}\put(101.50,38.59){\rule{2.76pt}{13.08pt}}}%
+{\color{blueband}\put(104.11,38.97){\rule{2.76pt}{12.56pt}}}%
+{\color{blueband}\put(106.73,39.63){\rule{2.76pt}{16.09pt}}}%
+{\color{blueband}\put(109.34,39.41){\rule{2.76pt}{16.45pt}}}%
+{\color{blueband}\put(111.95,40.73){\rule{2.76pt}{12.88pt}}}%
+{\color{blueband}\put(114.57,41.96){\rule{2.76pt}{11.65pt}}}%
+{\color{blueband}\put(117.18,41.78){\rule{2.76pt}{12.45pt}}}%
+{\color{blueband}\put(119.79,43.26){\rule{2.76pt}{13.71pt}}}%
+{\color{blueband}\put(122.41,43.75){\rule{2.76pt}{13.45pt}}}%
+{\color{blueband}\put(125.02,44.37){\rule{2.76pt}{13.51pt}}}%
+{\color{blueband}\put(127.63,44.43){\rule{2.76pt}{14.16pt}}}%
+{\color{blueband}\put(130.25,45.79){\rule{2.76pt}{13.66pt}}}%
+{\color{blueband}\put(132.86,45.32){\rule{2.76pt}{15.33pt}}}%
+{\color{blueband}\put(135.47,45.39){\rule{2.76pt}{17.34pt}}}%
+{\color{blueband}\put(138.09,46.17){\rule{2.76pt}{15.80pt}}}%
+{\color{blueband}\put(140.70,49.23){\rule{2.76pt}{13.85pt}}}%
+{\color{blueband}\put(143.31,49.98){\rule{2.76pt}{11.61pt}}}%
+{\color{blueband}\put(145.93,50.10){\rule{2.76pt}{13.99pt}}}%
+{\color{blueband}\put(148.54,49.98){\rule{2.76pt}{15.31pt}}}%
+{\color{blueband}\put(151.15,52.93){\rule{2.76pt}{13.91pt}}}%
+{\color{blueband}\put(153.76,52.57){\rule{2.76pt}{14.54pt}}}%
+{\color{blueband}\put(156.38,53.25){\rule{2.76pt}{14.38pt}}}%
+{\color{blueband}\put(158.99,53.89){\rule{2.76pt}{13.55pt}}}%
+{\color{blueband}\put(161.61,53.20){\rule{2.76pt}{12.67pt}}}%
+{\color{blueband}\put(164.22,53.13){\rule{2.76pt}{15.49pt}}}%
+{\color{blueband}\put(166.83,52.07){\rule{2.76pt}{16.72pt}}}%
+{\color{blueband}\put(169.44,50.60){\rule{2.76pt}{18.18pt}}}%
+{\color{blueband}\put(172.06,51.29){\rule{2.76pt}{20.52pt}}}%
+{\color{blueband}\put(174.67,50.91){\rule{2.76pt}{23.36pt}}}%
+{\color{blueband}\put(177.28,51.01){\rule{2.76pt}{22.94pt}}}%
+{\color{blueband}\put(179.90,53.88){\rule{2.76pt}{20.23pt}}}%
+{\color{blueband}\put(182.51,53.79){\rule{2.76pt}{16.71pt}}}%
+{\color{blueband}\put(185.12,62.98){\rule{2.76pt}{9.64pt}}}%
+{\color{blueband}\put(187.74,64.38){\rule{2.76pt}{9.73pt}}}%
+{\color{blueband}\put(190.35,64.12){\rule{2.76pt}{14.63pt}}}%
+{\color{blueband}\put(192.97,64.97){\rule{2.76pt}{10.72pt}}}%
+{\color{blueband}\put(195.58,65.35){\rule{2.76pt}{8.59pt}}}%
+{\color{blueband}\put(198.19,64.10){\rule{2.76pt}{13.36pt}}}%
+{\color{blueband}\put(200.81,61.89){\rule{2.76pt}{19.25pt}}}%
+{\color{blueband}\put(203.42,63.46){\rule{2.76pt}{16.53pt}}}%
+{\color{blueband}\put(206.03,63.52){\rule{2.76pt}{21.34pt}}}%
+{\color{blueband}\put(208.65,69.75){\rule{2.76pt}{18.42pt}}}%
+{\color{blueband}\put(211.26,72.40){\rule{2.76pt}{15.75pt}}}%
+{\color{blueband}\put(213.87,71.38){\rule{2.76pt}{16.47pt}}}%
+{\color{blueband}\put(216.49,73.75){\rule{2.76pt}{21.53pt}}}%
+{\color{blueband}\put(219.10,75.29){\rule{2.76pt}{18.84pt}}}%
+{\color{blueband}\put(221.71,77.95){\rule{2.76pt}{20.60pt}}}%
+{\color{blueband}\put(224.33,80.02){\rule{2.76pt}{21.24pt}}}%
+{\color{blueband}\put(226.94,80.29){\rule{2.76pt}{22.33pt}}}%
+{\color{blueband}\put(229.55,81.86){\rule{2.76pt}{20.79pt}}}%
+{\color{blueband}\put(232.16,79.38){\rule{2.76pt}{26.71pt}}}%
+{\color{blueband}\put(234.78,82.27){\rule{2.76pt}{23.02pt}}}%
+{\color{blueband}\put(237.39,81.79){\rule{2.76pt}{30.11pt}}}%
+{\color{blueband}\put(240.00,88.64){\rule{2.76pt}{26.59pt}}}%
+{\color{blueband}\put(242.62,85.35){\rule{2.76pt}{30.24pt}}}%
+{\color{blueband}\put(245.23,87.84){\rule{2.76pt}{28.50pt}}}%
+{\color{blueband}\put(247.84,92.18){\rule{2.76pt}{36.50pt}}}%
+{\color{blueband}\put(250.46,91.27){\rule{2.76pt}{45.60pt}}}%
+{\color{blueband}\put(253.07,93.99){\rule{2.76pt}{44.22pt}}}%
+{\color{blueband}\put(255.69,95.33){\rule{2.76pt}{56.81pt}}}%
+{\color{blueband}\put(258.30,115.83){\rule{2.76pt}{56.15pt}}}%
+{\color{blueband}\put(260.91,122.49){\rule{2.76pt}{27.21pt}}}%
+{\color{blueband}\put(263.52,121.60){\rule{2.76pt}{24.29pt}}}%
+{\color{blueband}\put(266.14,123.46){\rule{2.76pt}{21.24pt}}}%
+{\color{blueband}\put(268.75,121.06){\rule{2.76pt}{19.16pt}}}%
+{\color{blueband}\put(271.37,119.66){\rule{2.76pt}{17.50pt}}}%
+{\color{blueband}\put(273.98,115.83){\rule{2.76pt}{29.59pt}}}%
+{\color{blueband}\put(276.59,117.93){\rule{2.76pt}{27.10pt}}}%
+{\color{blueband}\put(279.21,121.59){\rule{2.76pt}{21.06pt}}}%
+{\color{blueband}\put(281.82,117.85){\rule{2.76pt}{25.09pt}}}%
+{\color{blueband}\put(284.43,110.60){\rule{2.76pt}{38.41pt}}}%
+{\color{blueband}\put(287.05,115.48){\rule{2.76pt}{27.79pt}}}%
+{\color{blueband}\put(289.66,108.99){\rule{2.76pt}{39.85pt}}}%
+{\color{blueband}\put(292.27,109.69){\rule{2.76pt}{36.59pt}}}%
+{\color{blueband}\put(294.88,102.64){\rule{2.76pt}{38.00pt}}}%
+{\color{blueband}\put(297.50,102.01){\rule{2.76pt}{37.83pt}}}%
+{\color{blueband}\put(300.11,102.04){\rule{2.76pt}{37.91pt}}}%
+{\color{blueband}\put(302.73,102.02){\rule{2.76pt}{40.91pt}}}%
+{\color{blueband}\put(305.34,103.36){\rule{2.76pt}{38.76pt}}}%
+{\color{blueband}\put(307.95,103.88){\rule{2.76pt}{38.06pt}}}%
+{\color{blueband}\put(310.56,101.12){\rule{2.76pt}{38.33pt}}}%
+{\color{blueband}\put(313.18,99.58){\rule{2.76pt}{38.84pt}}}%
+{\color{blueband}\put(315.79,98.50){\rule{2.76pt}{39.73pt}}}%
+{\color{blueband}\put(318.41,98.36){\rule{2.76pt}{29.94pt}}}%
+{\color{blueband}\put(321.02,98.32){\rule{2.76pt}{32.77pt}}}%
+{\color{blueband}\put(323.63,92.42){\rule{2.76pt}{34.61pt}}}%
+{\color{blueband}\put(326.25,92.50){\rule{2.76pt}{33.37pt}}}%
+{\color{blueband}\put(328.86,92.13){\rule{2.76pt}{35.78pt}}}%
+{\color{blueband}\put(331.47,89.15){\rule{2.76pt}{38.38pt}}}%
+{\color{blueband}\put(334.08,94.07){\rule{2.76pt}{33.81pt}}}%
+{\color{blueband}\put(336.70,88.57){\rule{2.76pt}{37.47pt}}}%
+{\color{blueband}\put(339.31,90.99){\rule{2.76pt}{34.85pt}}}%
+{\color{blueband}\put(341.93,91.27){\rule{2.76pt}{28.52pt}}}%
+{\color{blueband}\put(344.54,90.26){\rule{2.76pt}{29.35pt}}}%
+{\color{blueband}\put(347.15,90.61){\rule{2.76pt}{29.49pt}}}%
+{\color{blueband}\put(349.76,87.55){\rule{2.76pt}{29.34pt}}}%
+{\color{blueband}\put(352.38,85.99){\rule{2.76pt}{31.57pt}}}%
+{\color{blueband}\put(354.99,86.32){\rule{2.76pt}{31.01pt}}}%
+{\color{blueband}\put(357.61,86.26){\rule{2.76pt}{31.07pt}}}%
+{\color{blueband}\put(360.22,86.27){\rule{2.76pt}{31.28pt}}}%
+{\color{blueband}\put(362.83,86.27){\rule{2.76pt}{31.11pt}}}%
+{\color{blueband}\put(365.44,85.28){\rule{2.76pt}{32.05pt}}}%
+{\color{blueband}\put(368.06,86.00){\rule{2.76pt}{31.39pt}}}%
+{\color{blueband}\put(370.67,87.45){\rule{2.76pt}{33.36pt}}}%
+{\color{blueband}\put(373.29,87.22){\rule{2.76pt}{33.49pt}}}%
+{\color{blueband}\put(375.90,86.69){\rule{2.76pt}{34.51pt}}}%
+{\color{blueband}\put(378.51,86.57){\rule{2.76pt}{34.77pt}}}%
+{\color{blueband}\put(381.12,86.72){\rule{2.76pt}{35.71pt}}}%
+{\color{blueband}\put(383.74,86.81){\rule{2.76pt}{34.87pt}}}%
+{\color{blueband}\put(386.35,84.87){\rule{2.76pt}{36.88pt}}}%
+{\color{blueband}\put(388.97,84.50){\rule{2.76pt}{36.41pt}}}%
+{\color{blueband}\put(391.58,84.96){\rule{2.76pt}{36.03pt}}}%
+{\color{blueband}\put(394.19,84.08){\rule{2.76pt}{36.96pt}}}%
+{\color{blueband}\put(396.81,84.08){\rule{2.76pt}{36.89pt}}}%
+{\color{blueband}\put(399.42,77.14){\rule{2.76pt}{43.76pt}}}%
+{\color{blueband}\put(402.03,76.61){\rule{2.76pt}{44.29pt}}}%
+{\color{blueband}\put(404.64,76.58){\rule{2.76pt}{44.32pt}}}%
+{\color{blueband}\put(407.26,76.02){\rule{2.76pt}{44.84pt}}}%
+{\color{blueband}\put(409.87,76.05){\rule{2.76pt}{44.98pt}}}%
+{\color{blueband}\put(412.49,76.01){\rule{2.76pt}{45.03pt}}}%
+{\color{blueband}\put(415.10,75.84){\rule{2.76pt}{43.19pt}}}%
+{\color{blueband}\put(417.71,75.82){\rule{2.76pt}{43.25pt}}}%
+{\color{blueband}\put(420.32,75.76){\rule{2.76pt}{42.36pt}}}%
+{\color{blueband}\put(422.94,75.70){\rule{2.76pt}{43.00pt}}}%
+{\color{blueband}\put(425.55,75.82){\rule{2.76pt}{42.77pt}}}%
+{\color{blueband}\put(428.17,75.36){\rule{2.76pt}{44.25pt}}}%
+{\color{blueband}\put(430.78,75.18){\rule{2.76pt}{44.31pt}}}%
+{\color{blueband}\put(433.39,75.12){\rule{2.76pt}{39.85pt}}}%
+{\color{blueband}\put(436.66,75.16){\rule{1.46pt}{39.27pt}}}%
+{\color{orangeband}\put(49.88,35.53){\rule{1.46pt}{0.66pt}}}%
+{\color{orangeband}\put(51.84,35.19){\rule{2.76pt}{1.73pt}}}%
+{\color{orangeband}\put(54.46,35.25){\rule{2.76pt}{1.46pt}}}%
+{\color{orangeband}\put(57.07,35.69){\rule{2.76pt}{2.13pt}}}%
+{\color{orangeband}\put(59.68,35.46){\rule{2.76pt}{5.16pt}}}%
+{\color{orangeband}\put(62.30,35.40){\rule{2.76pt}{4.95pt}}}%
+{\color{orangeband}\put(64.91,35.52){\rule{2.76pt}{5.21pt}}}%
+{\color{orangeband}\put(67.53,35.50){\rule{2.76pt}{4.92pt}}}%
+{\color{orangeband}\put(70.14,35.50){\rule{2.76pt}{6.02pt}}}%
+{\color{orangeband}\put(72.75,36.97){\rule{2.76pt}{7.77pt}}}%
+{\color{orangeband}\put(75.37,37.02){\rule{2.76pt}{8.09pt}}}%
+{\color{orangeband}\put(77.98,37.18){\rule{2.76pt}{9.30pt}}}%
+{\color{orangeband}\put(80.59,37.58){\rule{2.76pt}{9.02pt}}}%
+{\color{orangeband}\put(83.21,37.73){\rule{2.76pt}{11.00pt}}}%
+{\color{orangeband}\put(85.82,37.39){\rule{2.76pt}{10.85pt}}}%
+{\color{orangeband}\put(88.43,37.40){\rule{2.76pt}{10.92pt}}}%
+{\color{orangeband}\put(91.05,38.19){\rule{2.76pt}{9.79pt}}}%
+{\color{orangeband}\put(93.66,37.89){\rule{2.76pt}{11.25pt}}}%
+{\color{orangeband}\put(96.27,37.99){\rule{2.76pt}{11.50pt}}}%
+{\color{orangeband}\put(98.89,38.24){\rule{2.76pt}{9.69pt}}}%
+{\color{orangeband}\put(101.50,38.75){\rule{2.76pt}{10.96pt}}}%
+{\color{orangeband}\put(104.11,38.79){\rule{2.76pt}{10.85pt}}}%
+{\color{orangeband}\put(106.73,39.18){\rule{2.76pt}{13.24pt}}}%
+{\color{orangeband}\put(109.34,38.85){\rule{2.76pt}{13.70pt}}}%
+{\color{orangeband}\put(111.95,40.00){\rule{2.76pt}{16.19pt}}}%
+{\color{orangeband}\put(114.57,40.32){\rule{2.76pt}{17.20pt}}}%
+{\color{orangeband}\put(117.18,40.37){\rule{2.76pt}{17.04pt}}}%
+{\color{orangeband}\put(119.79,42.31){\rule{2.76pt}{13.55pt}}}%
+{\color{orangeband}\put(122.41,42.22){\rule{2.76pt}{15.36pt}}}%
+{\color{orangeband}\put(125.02,42.36){\rule{2.76pt}{15.22pt}}}%
+{\color{orangeband}\put(127.63,42.77){\rule{2.76pt}{15.72pt}}}%
+{\color{orangeband}\put(130.25,42.98){\rule{2.76pt}{15.80pt}}}%
+{\color{orangeband}\put(132.86,42.48){\rule{2.76pt}{16.87pt}}}%
+{\color{orangeband}\put(135.47,45.35){\rule{2.76pt}{14.27pt}}}%
+{\color{orangeband}\put(138.09,45.68){\rule{2.76pt}{14.95pt}}}%
+{\color{orangeband}\put(140.70,46.27){\rule{2.76pt}{14.54pt}}}%
+{\color{orangeband}\put(143.31,45.95){\rule{2.76pt}{13.22pt}}}%
+{\color{orangeband}\put(145.93,46.32){\rule{2.76pt}{14.69pt}}}%
+{\color{orangeband}\put(148.54,46.85){\rule{2.76pt}{14.67pt}}}%
+{\color{orangeband}\put(151.15,47.07){\rule{2.76pt}{15.72pt}}}%
+{\color{orangeband}\put(153.76,47.05){\rule{2.76pt}{14.14pt}}}%
+{\color{orangeband}\put(156.38,48.17){\rule{2.76pt}{12.59pt}}}%
+{\color{orangeband}\put(158.99,48.22){\rule{2.76pt}{15.07pt}}}%
+{\color{orangeband}\put(161.61,49.02){\rule{2.76pt}{12.81pt}}}%
+{\color{orangeband}\put(164.22,48.30){\rule{2.76pt}{14.31pt}}}%
+{\color{orangeband}\put(166.83,48.58){\rule{2.76pt}{17.29pt}}}%
+{\color{orangeband}\put(169.44,48.71){\rule{2.76pt}{15.86pt}}}%
+{\color{orangeband}\put(172.06,50.17){\rule{2.76pt}{17.66pt}}}%
+{\color{orangeband}\put(174.67,52.02){\rule{2.76pt}{15.94pt}}}%
+{\color{orangeband}\put(177.28,52.61){\rule{2.76pt}{15.07pt}}}%
+{\color{orangeband}\put(179.90,53.20){\rule{2.76pt}{15.58pt}}}%
+{\color{orangeband}\put(182.51,53.32){\rule{2.76pt}{15.77pt}}}%
+{\color{orangeband}\put(185.12,53.49){\rule{2.76pt}{14.41pt}}}%
+{\color{orangeband}\put(187.74,53.65){\rule{2.76pt}{15.82pt}}}%
+{\color{orangeband}\put(190.35,54.01){\rule{2.76pt}{17.39pt}}}%
+{\color{orangeband}\put(192.97,54.06){\rule{2.76pt}{17.32pt}}}%
+{\color{orangeband}\put(195.58,53.37){\rule{2.76pt}{17.13pt}}}%
+{\color{orangeband}\put(198.19,53.74){\rule{2.76pt}{16.01pt}}}%
+{\color{orangeband}\put(200.81,52.20){\rule{2.76pt}{16.54pt}}}%
+{\color{orangeband}\put(203.42,53.65){\rule{2.76pt}{14.49pt}}}%
+{\color{orangeband}\put(206.03,54.40){\rule{2.76pt}{13.45pt}}}%
+{\color{orangeband}\put(208.65,55.06){\rule{2.76pt}{11.96pt}}}%
+{\color{orangeband}\put(211.26,55.97){\rule{2.76pt}{10.17pt}}}%
+{\color{orangeband}\put(213.87,54.42){\rule{2.76pt}{10.91pt}}}%
+{\color{orangeband}\put(216.49,55.04){\rule{2.76pt}{9.59pt}}}%
+{\color{orangeband}\put(219.10,53.58){\rule{2.76pt}{13.93pt}}}%
+{\color{orangeband}\put(221.71,53.50){\rule{2.76pt}{18.02pt}}}%
+{\color{orangeband}\put(224.33,53.92){\rule{2.76pt}{17.42pt}}}%
+{\color{orangeband}\put(226.94,54.14){\rule{2.76pt}{16.21pt}}}%
+{\color{orangeband}\put(229.55,54.50){\rule{2.76pt}{16.12pt}}}%
+{\color{orangeband}\put(232.16,54.63){\rule{2.76pt}{16.11pt}}}%
+{\color{orangeband}\put(234.78,54.37){\rule{2.76pt}{17.73pt}}}%
+{\color{orangeband}\put(237.39,54.43){\rule{2.76pt}{19.17pt}}}%
+{\color{orangeband}\put(240.00,55.88){\rule{2.76pt}{18.85pt}}}%
+{\color{orangeband}\put(242.62,56.23){\rule{2.76pt}{16.82pt}}}%
+{\color{orangeband}\put(245.23,57.04){\rule{2.76pt}{22.66pt}}}%
+{\color{orangeband}\put(247.84,56.49){\rule{2.76pt}{22.02pt}}}%
+{\color{orangeband}\put(250.46,56.37){\rule{2.76pt}{22.90pt}}}%
+{\color{orangeband}\put(253.07,54.75){\rule{2.76pt}{24.34pt}}}%
+{\color{orangeband}\put(255.69,55.87){\rule{2.76pt}{22.43pt}}}%
+{\color{orangeband}\put(258.30,55.71){\rule{2.76pt}{18.57pt}}}%
+{\color{orangeband}\put(260.91,54.91){\rule{2.76pt}{19.60pt}}}%
+{\color{orangeband}\put(263.52,57.40){\rule{2.76pt}{15.93pt}}}%
+{\color{orangeband}\put(266.14,56.71){\rule{2.76pt}{16.11pt}}}%
+{\color{orangeband}\put(268.75,58.09){\rule{2.76pt}{15.99pt}}}%
+{\color{orangeband}\put(271.37,56.46){\rule{2.76pt}{19.50pt}}}%
+{\color{orangeband}\put(273.98,57.41){\rule{2.76pt}{18.55pt}}}%
+{\color{orangeband}\put(276.59,58.15){\rule{2.76pt}{17.63pt}}}%
+{\color{orangeband}\put(279.21,58.29){\rule{2.76pt}{17.42pt}}}%
+{\color{orangeband}\put(281.82,58.77){\rule{2.76pt}{16.41pt}}}%
+{\color{orangeband}\put(284.43,58.54){\rule{2.76pt}{16.50pt}}}%
+{\color{orangeband}\put(287.05,57.77){\rule{2.76pt}{16.39pt}}}%
+{\color{orangeband}\put(289.66,58.35){\rule{2.76pt}{15.00pt}}}%
+{\color{orangeband}\put(292.27,55.90){\rule{2.76pt}{17.65pt}}}%
+{\color{orangeband}\put(294.88,55.72){\rule{2.76pt}{18.73pt}}}%
+{\color{orangeband}\put(297.50,56.90){\rule{2.76pt}{17.63pt}}}%
+{\color{orangeband}\put(300.11,57.35){\rule{2.76pt}{15.77pt}}}%
+{\color{orangeband}\put(302.73,57.15){\rule{2.76pt}{12.97pt}}}%
+{\color{orangeband}\put(305.34,58.27){\rule{2.76pt}{13.61pt}}}%
+{\color{orangeband}\put(307.95,58.77){\rule{2.76pt}{16.77pt}}}%
+{\color{orangeband}\put(310.56,57.87){\rule{2.76pt}{16.10pt}}}%
+{\color{orangeband}\put(313.18,58.32){\rule{2.76pt}{21.07pt}}}%
+{\color{orangeband}\put(315.79,57.18){\rule{2.76pt}{17.44pt}}}%
+{\color{orangeband}\put(318.41,57.02){\rule{2.76pt}{17.61pt}}}%
+{\color{orangeband}\put(321.02,56.20){\rule{2.76pt}{18.29pt}}}%
+{\color{orangeband}\put(323.63,56.76){\rule{2.76pt}{17.81pt}}}%
+{\color{orangeband}\put(326.25,55.66){\rule{2.76pt}{18.06pt}}}%
+{\color{orangeband}\put(328.86,55.08){\rule{2.76pt}{19.65pt}}}%
+{\color{orangeband}\put(331.47,55.00){\rule{2.76pt}{19.56pt}}}%
+{\color{orangeband}\put(334.08,54.12){\rule{2.76pt}{17.58pt}}}%
+{\color{orangeband}\put(336.70,53.60){\rule{2.76pt}{18.09pt}}}%
+{\color{orangeband}\put(339.31,54.53){\rule{2.76pt}{25.29pt}}}%
+{\color{orangeband}\put(341.93,55.06){\rule{2.76pt}{25.47pt}}}%
+{\color{orangeband}\put(344.54,55.42){\rule{2.76pt}{25.07pt}}}%
+{\color{orangeband}\put(347.15,55.12){\rule{2.76pt}{25.47pt}}}%
+{\color{orangeband}\put(349.76,54.80){\rule{2.76pt}{20.69pt}}}%
+{\color{orangeband}\put(352.38,55.04){\rule{2.76pt}{20.50pt}}}%
+{\color{orangeband}\put(354.99,55.05){\rule{2.76pt}{21.17pt}}}%
+{\color{orangeband}\put(357.61,54.79){\rule{2.76pt}{21.62pt}}}%
+{\color{orangeband}\put(360.22,54.73){\rule{2.76pt}{21.20pt}}}%
+{\color{orangeband}\put(362.83,55.42){\rule{2.76pt}{20.39pt}}}%
+{\color{orangeband}\put(365.44,55.23){\rule{2.76pt}{20.52pt}}}%
+{\color{orangeband}\put(368.06,55.06){\rule{2.76pt}{20.73pt}}}%
+{\color{orangeband}\put(370.67,55.13){\rule{2.76pt}{16.38pt}}}%
+{\color{orangeband}\put(373.29,55.53){\rule{2.76pt}{17.12pt}}}%
+{\color{orangeband}\put(375.90,55.41){\rule{2.76pt}{17.58pt}}}%
+{\color{orangeband}\put(378.51,55.82){\rule{2.76pt}{17.20pt}}}%
+{\color{orangeband}\put(381.12,56.07){\rule{2.76pt}{16.85pt}}}%
+{\color{orangeband}\put(383.74,56.28){\rule{2.76pt}{16.27pt}}}%
+{\color{orangeband}\put(386.35,56.41){\rule{2.76pt}{16.05pt}}}%
+{\color{orangeband}\put(388.97,56.10){\rule{2.76pt}{16.89pt}}}%
+{\color{orangeband}\put(391.58,56.11){\rule{2.76pt}{16.97pt}}}%
+{\color{orangeband}\put(394.19,54.03){\rule{2.76pt}{19.15pt}}}%
+{\color{orangeband}\put(396.81,53.50){\rule{2.76pt}{20.07pt}}}%
+{\color{orangeband}\put(399.42,53.76){\rule{2.76pt}{18.33pt}}}%
+{\color{orangeband}\put(402.03,53.64){\rule{2.76pt}{18.35pt}}}%
+{\color{orangeband}\put(404.64,53.47){\rule{2.76pt}{18.44pt}}}%
+{\color{orangeband}\put(407.26,53.66){\rule{2.76pt}{18.15pt}}}%
+{\color{orangeband}\put(409.87,52.20){\rule{2.76pt}{20.34pt}}}%
+{\color{orangeband}\put(412.49,51.79){\rule{2.76pt}{20.77pt}}}%
+{\color{orangeband}\put(415.10,53.36){\rule{2.76pt}{19.10pt}}}%
+{\color{orangeband}\put(417.71,53.62){\rule{2.76pt}{18.85pt}}}%
+{\color{orangeband}\put(420.32,53.61){\rule{2.76pt}{19.07pt}}}%
+{\color{orangeband}\put(422.94,53.49){\rule{2.76pt}{18.49pt}}}%
+{\color{orangeband}\put(425.55,53.25){\rule{2.76pt}{22.34pt}}}%
+{\color{orangeband}\put(428.17,52.56){\rule{2.76pt}{24.30pt}}}%
+{\color{orangeband}\put(430.78,53.03){\rule{2.76pt}{25.06pt}}}%
+{\color{orangeband}\put(433.39,52.60){\rule{2.76pt}{25.50pt}}}%
+{\color{orangeband}\put(436.66,52.59){\rule{1.46pt}{27.15pt}}}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(50.61,35.68)(51.92,35.98)(53.23,36.29)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(53.23,36.29)(54.53,36.04)(55.84,35.80)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(55.84,35.80)(57.15,36.02)(58.45,36.24)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(58.45,36.24)(59.76,36.17)(61.07,36.10)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(61.07,36.10)(62.37,36.13)(63.68,36.16)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(63.68,36.16)(64.99,36.19)(66.29,36.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(66.29,36.22)(67.60,36.51)(68.91,36.80)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(68.91,36.80)(70.21,37.63)(71.52,38.45)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(71.52,38.45)(72.83,38.61)(74.13,38.77)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(74.13,38.77)(75.44,39.09)(76.75,39.41)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(76.75,39.41)(78.05,39.91)(79.36,40.42)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(79.36,40.42)(80.67,41.44)(81.97,42.47)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(81.97,42.47)(83.28,42.20)(84.59,41.94)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(84.59,41.94)(85.89,41.90)(87.20,41.86)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(87.20,41.86)(88.51,41.99)(89.81,42.12)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(89.81,42.12)(91.12,42.26)(92.43,42.40)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(92.43,42.40)(93.73,42.98)(95.04,43.56)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(95.04,43.56)(96.35,43.84)(97.65,44.12)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(97.65,44.12)(98.96,45.18)(100.27,46.24)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(100.27,46.24)(101.57,46.15)(102.88,46.05)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(102.88,46.05)(104.19,46.82)(105.49,47.58)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(105.49,47.58)(106.80,47.71)(108.11,47.84)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(108.11,47.84)(109.41,47.83)(110.72,47.82)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(110.72,47.82)(112.03,47.78)(113.33,47.74)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(113.33,47.74)(114.64,47.92)(115.95,48.11)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(115.95,48.11)(117.25,48.19)(118.56,48.27)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(118.56,48.27)(119.87,49.33)(121.17,50.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(121.17,50.38)(122.48,50.62)(123.79,50.86)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(123.79,50.86)(125.09,51.59)(126.40,52.31)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(126.40,52.31)(127.71,52.36)(129.01,52.40)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(129.01,52.40)(130.32,52.81)(131.63,53.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(131.63,53.22)(132.93,53.51)(134.24,53.80)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(134.24,53.80)(135.55,54.32)(136.85,54.84)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(136.85,54.84)(138.16,54.53)(139.47,54.21)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(139.47,54.21)(140.77,54.68)(142.08,55.14)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(142.08,55.14)(143.39,54.55)(144.69,53.96)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(144.69,53.96)(146.00,53.85)(147.31,53.75)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(147.31,53.75)(148.61,54.54)(149.92,55.34)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(149.92,55.34)(151.23,55.85)(152.53,56.36)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(152.53,56.36)(153.84,57.08)(155.15,57.81)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(155.15,57.81)(156.45,58.39)(157.76,58.98)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(157.76,58.98)(159.07,59.46)(160.37,59.95)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(160.37,59.95)(161.68,59.67)(162.99,59.38)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(162.99,59.38)(164.29,58.92)(165.60,58.46)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(165.60,58.46)(166.91,58.47)(168.21,58.48)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(168.21,58.48)(169.52,58.63)(170.83,58.78)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(170.83,58.78)(172.13,60.17)(173.44,61.55)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(173.44,61.55)(174.75,62.44)(176.05,63.33)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(176.05,63.33)(177.36,63.70)(178.67,64.08)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(178.67,64.08)(179.97,63.49)(181.28,62.91)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(181.28,62.91)(182.59,63.42)(183.89,63.93)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(183.89,63.93)(185.20,65.26)(186.51,66.58)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(186.51,66.58)(187.81,67.74)(189.12,68.90)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(189.12,68.90)(190.43,68.75)(191.73,68.61)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(191.73,68.61)(193.04,69.23)(194.35,69.85)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(194.35,69.85)(195.65,69.40)(196.96,68.94)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(196.96,68.94)(198.27,70.65)(199.57,72.35)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(199.57,72.35)(200.88,73.11)(202.19,73.88)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(202.19,73.88)(203.49,74.35)(204.80,74.82)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(204.80,74.82)(206.11,76.55)(207.41,78.27)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(207.41,78.27)(208.72,78.39)(210.03,78.50)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(210.03,78.50)(211.33,79.69)(212.64,80.88)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(212.64,80.88)(213.95,82.28)(215.25,83.68)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(215.25,83.68)(216.56,84.14)(217.87,84.60)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(217.87,84.60)(219.17,83.47)(220.48,82.34)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(220.48,82.34)(221.79,83.20)(223.09,84.07)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(223.09,84.07)(224.40,83.94)(225.71,83.81)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(225.71,83.81)(227.01,85.52)(228.32,87.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(228.32,87.22)(229.63,90.61)(230.93,94.00)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(230.93,94.00)(232.24,95.67)(233.55,97.34)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(233.55,97.34)(234.85,97.39)(236.16,97.43)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(236.16,97.43)(237.47,99.04)(238.77,100.65)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(238.77,100.65)(240.08,102.23)(241.39,103.81)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(241.39,103.81)(242.69,104.03)(244.00,104.25)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(244.00,104.25)(245.31,104.97)(246.61,105.70)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(246.61,105.70)(247.92,107.91)(249.23,110.11)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(249.23,110.11)(250.53,111.35)(251.84,112.59)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(251.84,112.59)(253.15,114.34)(254.45,116.08)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(254.45,116.08)(255.76,116.59)(257.07,117.09)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(257.07,117.09)(258.37,126.75)(259.68,136.40)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(259.68,136.40)(260.99,136.93)(262.29,137.47)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(262.29,137.47)(263.60,133.88)(264.91,130.28)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(264.91,130.28)(266.21,130.39)(267.52,130.50)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(267.52,130.50)(268.83,131.20)(270.13,131.89)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(270.13,131.89)(271.44,129.87)(272.75,127.85)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(272.75,127.85)(274.05,131.66)(275.36,135.47)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(275.36,135.47)(276.67,133.64)(277.97,131.81)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(277.97,131.81)(279.28,132.83)(280.59,133.84)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(280.59,133.84)(281.89,130.92)(283.20,127.99)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(283.20,127.99)(284.51,124.89)(285.81,121.79)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(285.81,121.79)(287.12,123.30)(288.43,124.80)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(288.43,124.80)(289.73,125.44)(291.04,126.08)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(291.04,126.08)(292.35,125.40)(293.65,124.72)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(293.65,124.72)(294.96,124.53)(296.27,124.34)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(296.27,124.34)(297.57,122.56)(298.88,120.78)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(298.88,120.78)(300.19,121.04)(301.49,121.29)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(301.49,121.29)(302.80,118.97)(304.11,116.64)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(304.11,116.64)(305.41,117.01)(306.72,117.39)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(306.72,117.39)(308.03,117.44)(309.33,117.49)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(309.33,117.49)(310.64,116.86)(311.95,116.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(311.95,116.22)(313.25,116.49)(314.56,116.77)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(314.56,116.77)(315.87,116.20)(317.17,115.64)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(317.17,115.64)(318.48,114.26)(319.79,112.88)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(319.79,112.88)(321.09,111.58)(322.40,110.27)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(322.40,110.27)(323.71,110.23)(325.01,110.19)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(325.01,110.19)(326.32,109.71)(327.63,109.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(327.63,109.22)(328.93,109.17)(330.24,109.13)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(330.24,109.13)(331.55,109.36)(332.85,109.60)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(332.85,109.60)(334.16,109.97)(335.47,110.33)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(335.47,110.33)(336.77,110.52)(338.08,110.71)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(338.08,110.71)(339.39,109.56)(340.69,108.41)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(340.69,108.41)(342.00,106.69)(343.31,104.97)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(343.31,104.97)(344.61,105.26)(345.92,105.56)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(345.92,105.56)(347.23,105.61)(348.53,105.65)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(348.53,105.65)(349.84,105.55)(351.15,105.46)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(351.15,105.46)(352.45,105.38)(353.76,105.31)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(353.76,105.31)(355.07,105.19)(356.37,105.08)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(356.37,105.08)(357.68,105.35)(358.99,105.63)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(358.99,105.63)(360.29,105.64)(361.60,105.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(361.60,105.66)(362.91,105.63)(364.21,105.59)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(364.21,105.59)(365.52,105.22)(366.83,104.85)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(366.83,104.85)(368.13,104.75)(369.44,104.64)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(369.44,104.64)(370.75,101.79)(372.05,98.94)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(372.05,98.94)(373.36,98.87)(374.67,98.80)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(374.67,98.80)(375.97,98.55)(377.28,98.31)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(377.28,98.31)(378.59,98.29)(379.89,98.28)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(379.89,98.28)(381.20,98.42)(382.51,98.56)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(382.51,98.56)(383.81,96.08)(385.12,93.61)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(385.12,93.61)(386.43,92.73)(387.73,91.85)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(387.73,91.85)(389.04,91.29)(390.35,90.72)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(390.35,90.72)(391.65,90.56)(392.96,90.40)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(392.96,90.40)(394.27,90.22)(395.57,90.03)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(395.57,90.03)(396.88,90.32)(398.19,90.61)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(398.19,90.61)(399.49,89.71)(400.80,88.80)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(400.80,88.80)(402.11,88.15)(403.41,87.51)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(403.41,87.51)(404.72,87.97)(406.03,88.43)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(406.03,88.43)(407.33,88.48)(408.64,88.52)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(408.64,88.52)(409.95,87.84)(411.25,87.15)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(411.25,87.15)(412.56,87.18)(413.87,87.21)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(413.87,87.21)(415.17,87.10)(416.48,86.99)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(416.48,86.99)(417.79,86.87)(419.09,86.76)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(419.09,86.76)(420.40,86.79)(421.71,86.81)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(421.71,86.81)(423.01,86.84)(424.32,86.87)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(424.32,86.87)(425.63,87.63)(426.93,88.40)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(426.93,88.40)(428.24,88.49)(429.55,88.58)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(429.55,88.58)(430.85,88.59)(432.16,88.59)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(432.16,88.59)(433.47,88.63)(434.77,88.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(434.77,88.66)(436.08,88.64)(437.39,88.62)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(50.61,35.68)(51.92,35.98)(53.23,36.28)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(53.23,36.28)(54.53,36.03)(55.84,35.77)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(55.84,35.77)(57.15,35.98)(58.45,36.20)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(58.45,36.20)(59.76,36.12)(61.07,36.04)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(61.07,36.04)(62.37,36.07)(63.68,36.10)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(63.68,36.10)(64.99,36.13)(66.29,36.16)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(66.29,36.16)(67.60,36.45)(68.91,36.73)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(68.91,36.73)(70.21,37.23)(71.52,37.72)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(71.52,37.72)(72.83,38.07)(74.13,38.41)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(74.13,38.41)(75.44,38.42)(76.75,38.43)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(76.75,38.43)(78.05,38.90)(79.36,39.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(79.36,39.37)(80.67,40.52)(81.97,41.66)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(81.97,41.66)(83.28,41.75)(84.59,41.85)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(84.59,41.85)(85.89,41.97)(87.20,42.10)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(87.20,42.10)(88.51,41.80)(89.81,41.49)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(89.81,41.49)(91.12,41.87)(92.43,42.25)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(92.43,42.25)(93.73,42.25)(95.04,42.25)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(95.04,42.25)(96.35,42.41)(97.65,42.57)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(97.65,42.57)(98.96,42.85)(100.27,43.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(100.27,43.14)(101.57,43.37)(102.88,43.61)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(102.88,43.61)(104.19,43.88)(105.49,44.16)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(105.49,44.16)(106.80,44.10)(108.11,44.05)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(108.11,44.05)(109.41,44.12)(110.72,44.20)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(110.72,44.20)(112.03,44.12)(113.33,44.04)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(113.33,44.04)(114.64,44.79)(115.95,45.54)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(115.95,45.54)(117.25,45.32)(118.56,45.11)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(118.56,45.11)(119.87,45.91)(121.17,46.71)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(121.17,46.71)(122.48,46.77)(123.79,46.83)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(123.79,46.83)(125.09,47.68)(126.40,48.52)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(126.40,48.52)(127.71,49.87)(129.01,51.21)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(129.01,51.21)(130.32,51.20)(131.63,51.19)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(131.63,51.19)(132.93,52.48)(134.24,53.77)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(134.24,53.77)(135.55,53.81)(136.85,53.86)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(136.85,53.86)(138.16,53.04)(139.47,52.21)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(139.47,52.21)(140.77,51.62)(142.08,51.03)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(142.08,51.03)(143.39,51.03)(144.69,51.03)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(144.69,51.03)(146.00,53.06)(147.31,55.09)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(147.31,55.09)(148.61,55.12)(149.92,55.16)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(149.92,55.16)(151.23,55.23)(152.53,55.30)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(152.53,55.30)(153.84,55.22)(155.15,55.15)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(155.15,55.15)(156.45,55.33)(157.76,55.51)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(157.76,55.51)(159.07,56.90)(160.37,58.30)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(160.37,58.30)(161.68,57.99)(162.99,57.69)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(162.99,57.69)(164.29,57.86)(165.60,58.04)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(165.60,58.04)(166.91,56.69)(168.21,55.34)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(168.21,55.34)(169.52,55.38)(170.83,55.42)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(170.83,55.42)(172.13,56.32)(173.44,57.21)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(173.44,57.21)(174.75,57.02)(176.05,56.83)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(176.05,56.83)(177.36,56.88)(178.67,56.93)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(178.67,56.93)(179.97,56.01)(181.28,55.09)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(181.28,55.09)(182.59,55.82)(183.89,56.55)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(183.89,56.55)(185.20,56.72)(186.51,56.88)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(186.51,56.88)(187.81,58.32)(189.12,59.75)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(189.12,59.75)(190.43,59.57)(191.73,59.39)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(191.73,59.39)(193.04,59.70)(194.35,60.00)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(194.35,60.00)(195.65,61.05)(196.96,62.10)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(196.96,62.10)(198.27,61.61)(199.57,61.13)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(199.57,61.13)(200.88,61.57)(202.19,62.02)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(202.19,62.02)(203.49,60.01)(204.80,58.00)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(204.80,58.00)(206.11,58.58)(207.41,59.17)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(207.41,59.17)(208.72,59.25)(210.03,59.34)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(210.03,59.34)(211.33,59.49)(212.64,59.64)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(212.64,59.64)(213.95,59.63)(215.25,59.61)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(215.25,59.61)(216.56,59.81)(217.87,60.01)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(217.87,60.01)(219.17,59.99)(220.48,59.97)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(220.48,59.97)(221.79,60.20)(223.09,60.42)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(223.09,60.42)(224.40,60.17)(225.71,59.92)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(225.71,59.92)(227.01,60.43)(228.32,60.95)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(228.32,60.95)(229.63,61.04)(230.93,61.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(230.93,61.14)(232.24,61.49)(233.55,61.85)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(233.55,61.85)(234.85,61.31)(236.16,60.77)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(236.16,60.77)(237.47,60.88)(238.77,61.00)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(238.77,61.00)(240.08,61.01)(241.39,61.03)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(241.39,61.03)(242.69,61.01)(244.00,60.98)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(244.00,60.98)(245.31,62.13)(246.61,63.28)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(246.61,63.28)(247.92,63.16)(249.23,63.04)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(249.23,63.04)(250.53,62.55)(251.84,62.06)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(251.84,62.06)(253.15,61.46)(254.45,60.85)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(254.45,60.85)(255.76,61.32)(257.07,61.79)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(257.07,61.79)(258.37,61.56)(259.68,61.33)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(259.68,61.33)(260.99,61.31)(262.29,61.28)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(262.29,61.28)(263.60,61.41)(264.91,61.54)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(264.91,61.54)(266.21,61.69)(267.52,61.83)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(267.52,61.83)(268.83,61.32)(270.13,60.80)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(270.13,60.80)(271.44,60.89)(272.75,60.98)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(272.75,60.98)(274.05,60.83)(275.36,60.67)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(275.36,60.67)(276.67,61.35)(277.97,62.03)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(277.97,62.03)(279.28,62.56)(280.59,63.09)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(280.59,63.09)(281.89,63.23)(283.20,63.37)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(283.20,63.37)(284.51,63.40)(285.81,63.43)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(285.81,63.43)(287.12,63.04)(288.43,62.66)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(288.43,62.66)(289.73,62.76)(291.04,62.86)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(291.04,62.86)(292.35,63.17)(293.65,63.48)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(293.65,63.48)(294.96,63.12)(296.27,62.75)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(296.27,62.75)(297.57,63.33)(298.88,63.90)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(298.88,63.90)(300.19,63.94)(301.49,63.98)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(301.49,63.98)(302.80,63.74)(304.11,63.50)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(304.11,63.50)(305.41,64.09)(306.72,64.67)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(306.72,64.67)(308.03,65.62)(309.33,66.56)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(309.33,66.56)(310.64,64.51)(311.95,62.46)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(311.95,62.46)(313.25,63.30)(314.56,64.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(314.56,64.14)(315.87,63.29)(317.17,62.45)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(317.17,62.45)(318.48,60.87)(319.79,59.29)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(319.79,59.29)(321.09,59.26)(322.40,59.24)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(322.40,59.24)(323.71,59.29)(325.01,59.33)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(325.01,59.33)(326.32,60.39)(327.63,61.45)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(327.63,61.45)(328.93,62.18)(330.24,62.92)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(330.24,62.92)(331.55,62.41)(332.85,61.91)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(332.85,61.91)(334.16,61.66)(335.47,61.40)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(335.47,61.40)(336.77,61.36)(338.08,61.31)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(338.08,61.31)(339.39,61.95)(340.69,62.58)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(340.69,62.58)(342.00,62.31)(343.31,62.04)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(343.31,62.04)(344.61,61.97)(345.92,61.91)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(345.92,61.91)(347.23,62.36)(348.53,62.81)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(348.53,62.81)(349.84,62.34)(351.15,61.88)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(351.15,61.88)(352.45,61.61)(353.76,61.35)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(353.76,61.35)(355.07,61.37)(356.37,61.40)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(356.37,61.40)(357.68,61.49)(358.99,61.58)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(358.99,61.58)(360.29,61.75)(361.60,61.91)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(361.60,61.91)(362.91,62.07)(364.21,62.22)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(364.21,62.22)(365.52,61.89)(366.83,61.56)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(366.83,61.56)(368.13,61.72)(369.44,61.88)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(369.44,61.88)(370.75,61.12)(372.05,60.36)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(372.05,60.36)(373.36,60.92)(374.67,61.48)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(374.67,61.48)(375.97,61.57)(377.28,61.66)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(377.28,61.66)(378.59,61.34)(379.89,61.03)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(379.89,61.03)(381.20,61.14)(382.51,61.25)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(382.51,61.25)(383.81,61.07)(385.12,60.89)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(385.12,60.89)(386.43,61.00)(387.73,61.10)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(387.73,61.10)(389.04,60.70)(390.35,60.29)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(390.35,60.29)(391.65,60.10)(392.96,59.91)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(392.96,59.91)(394.27,60.00)(395.57,60.08)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(395.57,60.08)(396.88,61.57)(398.19,63.05)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(398.19,63.05)(399.49,62.95)(400.80,62.85)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(400.80,62.85)(402.11,62.29)(403.41,61.72)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(403.41,61.72)(404.72,62.05)(406.03,62.38)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(406.03,62.38)(407.33,62.34)(408.64,62.30)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(408.64,62.30)(409.95,62.24)(411.25,62.17)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(411.25,62.17)(412.56,61.99)(413.87,61.81)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(413.87,61.81)(415.17,62.01)(416.48,62.20)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(416.48,62.20)(417.79,61.78)(419.09,61.35)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(419.09,61.35)(420.40,61.45)(421.71,61.54)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(421.71,61.54)(423.01,61.43)(424.32,61.32)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(424.32,61.32)(425.63,60.02)(426.93,58.71)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(426.93,58.71)(428.24,58.50)(429.55,58.29)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(429.55,58.29)(430.85,58.20)(432.16,58.11)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(432.16,58.11)(433.47,58.34)(434.77,58.56)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(434.77,58.56)(436.08,58.56)(437.39,58.56)}%
+{\color{gray}\linethickness{1.05pt}\qbezier(50.61,35.63)(244.00,35.63)(437.39,35.63)}%
+{\color{bluecurve}\linethickness{1.3pt}\qbezier(48,199)(55,199)(62,199)}%
+{\color{black}\put(67,196){\scriptsize Least squares}}%
+{\color{orangecurve}\linethickness{1.3pt}\qbezier(178,199)(185,199)(192,199)}%
+{\color{black}\put(197,196){\scriptsize Ridge, alpha=1}}%
+{\color{gray}\linethickness{1.3pt}\qbezier(308,199)(315,199)(322,199)}%
+{\color{black}\put(327,196){\scriptsize Baseline}}%
+\linethickness{0.6pt}\put(48,34){\line(1,0){392}}\put(48,34){\line(0,1){145}}%
+\put(244,5){\makebox(0,0){\scriptsize Number of features ($d$)}}%
+\end{picture}\end{center}
+{\small\textit{Figure 4.} Medians with descriptive 25th--75th percentile bands. All curves use the same 20 runs and common dimensions. The gray line is the median of separately fitted baseline errors.}
+
+All 20 repetitions reach interpolation, with first interpolating dimensions ranging from 80 to 93. Their feature sets differ because both the training subset and feature ordering change. The aggregate median curve has a substantial peak around this region, followed by a decline. It does not display a clean initial descending segment comparable to the synthetic curve.
+
+\begin{center}\begin{tabular}{lr}\toprule
+Quantity & Verified value\\\midrule
+Median least-squares peak, $d=82$ & 6,063.209\\
+Median least squares at common $d=149$ & 99.277\\
+Median ridge at common $d=149$ & 7.903\\
+Median training-mean baseline & 1.147\\
+Ridge wins versus paired baseline at $d=149$ & 0 / 20\\
+\bottomrule\end{tabular}\end{center}
+
+The median least-squares decline from the peak is substantial, but its final error remains far above its low-dimensional error. Ridge reduces the instability without recovering baseline-level performance at the final common dimension. The paired comparison is stronger than simply comparing the two medians: every final ridge fit loses to the baseline fitted from its own training labels. This statement is specific to $d=149$, not to every dimension.
+
+The IQR documents large variability. Separate mean curves in the notebook remain strongly affected by extreme least-squares fits; aggregating by the mean and by the median answers different questions. Because test observations are fixed across repetitions, these bands describe sensitivity to training subsets and feature ordering. They do not quantify uncertainty over future dates or independent test samples.
+
+\newpage
+\pageheading{7. Noise extension and comparison across datasets}
+\begin{center}\setlength{\unitlength}{1pt}%
+\begin{picture}(460,222)%
+\put(48,211){\small\bfseries Noise extension: synthetic data, seed 42}%
+\put(0,190){\scriptsize Test MSE (log scale)}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,34.00)(244,34.00)(440,34.00)}%
+\put(42,32.00){\makebox(0,0)[r]{\scriptsize $10^{-2}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,63.00)(244,63.00)(440,63.00)}%
+\put(42,61.00){\makebox(0,0)[r]{\scriptsize $10^{-1}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,92.00)(244,92.00)(440,92.00)}%
+\put(42,90.00){\makebox(0,0)[r]{\scriptsize $10^{0}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,121.00)(244,121.00)(440,121.00)}%
+\put(42,119.00){\makebox(0,0)[r]{\scriptsize $10^{1}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,150.00)(244,150.00)(440,150.00)}%
+\put(42,148.00){\makebox(0,0)[r]{\scriptsize $10^{2}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48,179.00)(244,179.00)(440,179.00)}%
+\put(42,177.00){\makebox(0,0)[r]{\scriptsize $10^{3}$}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(48.00,34)(48.00,106.5)(48.00,179)}%
+\put(48.00,22){\makebox(0,0){\scriptsize 0}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(146.00,34)(146.00,106.5)(146.00,179)}%
+\put(146.00,22){\makebox(0,0){\scriptsize 100}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(195.00,34)(195.00,106.5)(195.00,179)}%
+\put(195.00,22){\makebox(0,0){\scriptsize 150}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(244.00,34)(244.00,106.5)(244.00,179)}%
+\put(244.00,22){\makebox(0,0){\scriptsize 200}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(342.00,34)(342.00,106.5)(342.00,179)}%
+\put(342.00,22){\makebox(0,0){\scriptsize 300}}%
+{\color{grid}\linethickness{0.35pt}\qbezier(440.00,34)(440.00,106.5)(440.00,179)}%
+\put(440.00,22){\makebox(0,0){\scriptsize 400}}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(57.80,89.13)(62.70,86.95)(67.60,84.77)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(67.60,84.77)(77.40,79.99)(87.20,75.20)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(87.20,75.20)(97.00,72.73)(106.80,70.26)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(106.80,70.26)(116.60,68.35)(126.40,66.44)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(126.40,66.44)(136.20,63.78)(146.00,61.12)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(146.00,61.12)(155.80,62.28)(165.60,63.45)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(165.60,63.45)(170.50,66.10)(175.40,68.74)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(175.40,68.74)(180.30,70.75)(185.20,72.76)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(185.20,72.76)(187.65,70.18)(190.10,67.60)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(190.10,67.60)(191.57,74.81)(193.04,82.03)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(193.04,82.03)(193.53,99.67)(194.02,117.32)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(194.02,117.32)(194.51,117.52)(195.00,117.73)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(195.00,117.73)(195.49,114.51)(195.98,111.28)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(195.98,111.28)(196.47,98.34)(196.96,85.39)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(196.96,85.39)(198.43,81.77)(199.90,78.15)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(199.90,78.15)(202.35,74.85)(204.80,71.54)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(204.80,71.54)(209.70,70.88)(214.60,70.22)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(214.60,70.22)(219.50,69.76)(224.40,69.30)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(224.40,69.30)(234.20,72.60)(244.00,75.90)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(244.00,75.90)(268.50,77.78)(293.00,79.66)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(293.00,79.66)(317.50,81.49)(342.00,83.31)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(342.00,83.31)(366.50,83.91)(391.00,84.50)}%
+{\color{bluecurve}\linethickness{1.05pt}\qbezier(391.00,84.50)(415.50,85.43)(440.00,86.36)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(57.80,93.23)(62.70,91.79)(67.60,90.35)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(67.60,90.35)(77.40,87.84)(87.20,85.34)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(87.20,85.34)(97.00,85.96)(106.80,86.58)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(106.80,86.58)(116.60,86.97)(126.40,87.36)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(126.40,87.36)(136.20,89.28)(146.00,91.19)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(146.00,91.19)(155.80,92.77)(165.60,94.35)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(165.60,94.35)(170.50,96.69)(175.40,99.04)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(175.40,99.04)(180.30,102.97)(185.20,106.90)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(185.20,106.90)(187.65,105.26)(190.10,103.62)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(190.10,103.62)(191.57,117.79)(193.04,131.96)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(193.04,131.96)(193.53,133.49)(194.02,135.01)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(194.02,135.01)(194.51,138.97)(195.00,142.93)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(195.00,142.93)(195.49,142.77)(195.98,142.61)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(195.98,142.61)(196.47,133.09)(196.96,123.56)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(196.96,123.56)(198.43,119.44)(199.90,115.31)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(199.90,115.31)(202.35,110.09)(204.80,104.87)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(204.80,104.87)(209.70,103.00)(214.60,101.14)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(214.60,101.14)(219.50,97.55)(224.40,93.97)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(224.40,93.97)(234.20,92.86)(244.00,91.75)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(244.00,91.75)(268.50,91.13)(293.00,90.51)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(293.00,90.51)(317.50,90.86)(342.00,91.21)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(342.00,91.21)(366.50,91.27)(391.00,91.33)}%
+{\color{orangecurve}\linethickness{1.05pt}\qbezier(391.00,91.33)(415.50,91.74)(440.00,92.15)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(57.80,100.42)(62.70,99.81)(67.60,99.19)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(67.60,99.19)(77.40,98.30)(87.20,97.42)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(87.20,97.42)(97.00,99.17)(106.80,100.92)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(106.80,100.92)(116.60,102.01)(126.40,103.10)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(126.40,103.10)(136.20,105.62)(146.00,108.14)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(146.00,108.14)(155.80,109.62)(165.60,111.10)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(165.60,111.10)(170.50,113.28)(175.40,115.45)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(175.40,115.45)(180.30,119.86)(185.20,124.27)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(185.20,124.27)(187.65,122.61)(190.10,120.95)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(190.10,120.95)(191.57,135.77)(193.04,150.59)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(193.04,150.59)(193.53,149.12)(194.02,147.64)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(194.02,147.64)(194.51,153.19)(195.00,158.74)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(195.00,158.74)(195.49,158.73)(195.98,158.73)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(195.98,158.73)(196.47,149.80)(196.96,140.87)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(196.96,140.87)(198.43,136.70)(199.90,132.52)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(199.90,132.52)(202.35,127.24)(204.80,121.97)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(204.80,121.97)(209.70,120.09)(214.60,118.20)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(214.60,118.20)(219.50,114.31)(224.40,110.41)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(224.40,110.41)(234.20,108.49)(244.00,106.57)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(244.00,106.57)(268.50,105.05)(293.00,103.54)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(293.00,103.54)(317.50,102.97)(342.00,102.41)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(342.00,102.41)(366.50,102.11)(391.00,101.82)}%
+{\color{greencurve}\linethickness{1.05pt}\qbezier(391.00,101.82)(415.50,101.78)(440.00,101.75)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,34)(195.00,36)(195.00,38)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,41)(195.00,43)(195.00,45)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,48)(195.00,50)(195.00,52)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,55)(195.00,57)(195.00,59)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,62)(195.00,64)(195.00,66)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,69)(195.00,71)(195.00,73)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,76)(195.00,78)(195.00,80)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,83)(195.00,85)(195.00,87)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,90)(195.00,92)(195.00,94)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,97)(195.00,99)(195.00,101)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,104)(195.00,106)(195.00,108)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,111)(195.00,113)(195.00,115)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,118)(195.00,120)(195.00,122)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,125)(195.00,127)(195.00,129)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,132)(195.00,134)(195.00,136)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,139)(195.00,141)(195.00,143)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,146)(195.00,148)(195.00,150)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,153)(195.00,155)(195.00,157)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,160)(195.00,162)(195.00,164)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,167)(195.00,169)(195.00,171)}%
+{\color{black}\linethickness{0.7pt}\qbezier(195.00,174)(195.00,176)(195.00,178)}%
+{\color{bluecurve}\linethickness{1.3pt}\qbezier(48,199)(55,199)(62,199)}%
+{\color{black}\put(67,196){\scriptsize $\sigma=0.1$}}%
+{\color{orangecurve}\linethickness{1.3pt}\qbezier(178,199)(185,199)(192,199)}%
+{\color{black}\put(197,196){\scriptsize $\sigma=0.5$}}%
+{\color{greencurve}\linethickness{1.3pt}\qbezier(308,199)(315,199)(322,199)}%
+{\color{black}\put(327,196){\scriptsize $\sigma=1.0$}}%
+\linethickness{0.6pt}\put(48,34){\line(1,0){392}}\put(48,34){\line(0,1){145}}%
+\put(244,5){\makebox(0,0){\scriptsize Number of features ($d$)}}%
+\end{picture}\end{center}
+{\small\textit{Figure 5.} The optional synthetic noise extension uses the same seed, feature matrices, coefficient vector and underlying standardized noise draws at each noise level. The displayed errors include test-label noise.}
+
+With seed 42 fixed, the experiment repeats the synthetic sweep at $\sigma\in\{0.1,0.5,1\}$. At $d=150$, test MSE is approximately 7.71, 57.02 and 200.16 respectively. In this diagnostic, larger label noise makes the instability near interpolation more pronounced. The noise variance also changes the irreducible error floor, so the curve's vertical displacement cannot be interpreted as estimation error alone.
+
+This is a single-seed extension. It supports a within-run comparison, but does not establish the same effect size across random datasets. Its seed-42 peak should not be compared numerically with the 30-run mean peak from Figure 1 as if both were the same statistic.
+
+\begin{center}\begin{tabular}{p{0.25\linewidth}p{0.30\linewidth}p{0.30\linewidth}}\toprule
+Aspect & Synthetic & Real world\\\midrule
+Feature structure & Independent Gaussian & Correlated, sparse, ill-conditioned\\
+Signal ordering & Early coordinates designed to matter & Random ordering after filtering\\
+Test protocol & Independent same-process samples & One later official test date\\
+Threshold & Clear at $d=n$ & Measured residual; varies by run\\
+Outcome & Clear double descent & Peak and decline, mixed full-curve evidence\\
+\bottomrule\end{tabular}\end{center}
+
+The same solvers can behave very differently under different feature geometry and evaluation protocols. Raw synthetic MSE and log-target BlogFeedback MSE are not on comparable numerical scales. The useful comparison concerns curve shape, interpolation, instability, and response to regularization, rather than which dataset has a smaller MSE.
+
+\newpage
+\pageheading{8. Limitations, reproducibility, and conclusions}
+\textbf{Numerical sensitivity.} The real-world least-squares fits depend on very small retained singular values. The shared $10^{-10}$ SVD cutoff makes rank reporting consistent with fitting, but it does not eliminate ill-conditioning. Floating-point libraries can produce slightly different results near the cutoff. Threshold and error magnitudes should therefore be interpreted with the stated tolerances, not as exact symbolic quantities.
+
+\textbf{Exploratory protocol.} The reduction from 150 to 80 training observations was made after inspecting rank and residual behavior. The final results are an exploratory analysis of the revised setup; they are not an untouched-test estimate of a selected prediction procedure. No independent validation protocol is implemented to select $d$ or $\alpha$. The analysis does not establish that any chosen model would be optimal for future data.
+
+\textbf{Data limitations.} The real-world study uses only a small subset of the available training data and a single held-out date. Correlation, sparse features, and temporal differences may contribute to the observed errors, but the experiment does not isolate their causal contributions. A multi-date evaluation, repeated noise extension, or comparison with a better-conditioned real-world dataset would provide additional evidence. None is claimed here.
+
+\textbf{Reproducible workflow.} The repository provides an executable runner, pinned numerical dependencies, both executed notebooks, PNG/PDF exports, numerical JSON files, and data checksums. From the repository root, run:
+\begin{verbatim}
+python -m pip install -r requirements.txt
+python src/run_experiments.py
+\end{verbatim}
+The verified runtime is Python 3.13.7, NumPy 2.4.6 and Matplotlib 3.11.0. The first run downloads the official dataset only if it is absent; a complete cached dataset permits offline execution. The runner sets the notebook working directory automatically and does not require Jupyter. Detailed environment and runtime information are stored in \texttt{results/environment.json}.
+
+The standalone LaTeX source embeds vector plot coordinates derived from the same JSON evidence, so it has no external image dependency. The supplied source builder regenerates these coordinates after an experiment rerun. Standard \texttt{pdflatex} commands are documented in the README; no BibTeX pass is needed.
+
+\textbf{Conclusions.} Three distinctions are central. First, sufficient parameter count must be separated from observed numerical interpolation. Second, a post-peak decline must be separated from a clean full double-descent curve. Third, improvement over unstable least squares must be separated from performance that beats a meaningful baseline. The synthetic results satisfy the first two strongly. The real-world results verify interpolation but provide mixed evidence for the full curve, and their final ridge fits fail the baseline comparison. Reporting these negative findings is essential to an accurate interpretation of the experiment.
+
+\newpage
+\pageheading{9. Sources and authorship}
+\begin{enumerate}
+\item M. Belkin, D. Hsu, S. Ma and S. Mandal (2019). Reconciling modern machine-learning practice and the classical bias--variance trade-off. \textit{Proceedings of the National Academy of Sciences}, 116(32), 15849--15854. \url{https://doi.org/10.1073/pnas.1903070116}.
+\item K. Buza (2014). \textit{BlogFeedback} [Dataset]. UCI Machine Learning Repository. \url{https://doi.org/10.24432/C58S3F}. Dataset licensed under Creative Commons Attribution 4.0. The project uses the official archive and the attribution above.
+\item N. Cesa-Bianchi. \textit{Machine learning course notes}, supplied course PDF. Relevant material: linear and ridge regression (PDF p. 40) and double descent (PDF p. 68).
+\item \textit{Statistical Methods for Machine Learning: Experimental Projects, A.Y. 2025/26}, supplied project brief. Assignment 4 and general coding/report requirements (PDF pp. 1--3, 8--9, 16).
+\end{enumerate}
+
+\textbf{Assistance acknowledgment.} Codex assisted with code review, revisions, experiment execution, visualization, and drafting this report. Numerical results were checked against the executed code. The student must review the implementation, evidence, references, and all report text, and ensure that the use and acknowledgment of assistance comply with the course's rules.
+
+\textbf{Required declaration: author review pending.} The following is the declaration reproduced from the project brief. It is included for the student to review; this draft does not sign or certify it on the student's behalf. Before submission, the student must determine whether the declaration is accurate, whether all assistance is adequately acknowledged, and whether any course-specific disclosure or approval is required.
+
+\begin{quote}\small
+I declare that this material, which I now submit for assessment, is entirely my own work and has not been taken from the work of others, save and to the extent that such work has been cited and acknowledged within the text of my work. I understand that plagiarism, collusion, and copying are grave and serious offences in the university and accept the penalties that would be imposed should I engage in plagiarism, collusion or copying. This assignment, or any part of it, has not been previously submitted by me or any other person for assessment on this or any other course of study.
+\end{quote}
+
+\textbf{Repository review.} The local package contains the report source, compiled PDF, reproducibility instructions, exported figures, numerical evidence, and executed code. Publishing the code/report and submitting the repository link are subsequent actions, as required by the project brief. They are not performed or certified by this report.
+
+\end{document}

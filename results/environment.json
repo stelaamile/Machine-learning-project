@@ -1,0 +1,15 @@
+{
+  "python": "3.13.7",
+  "numpy": "2.4.6",
+  "matplotlib": "3.11.0",
+  "platform": "macOS-13.0-arm64-arm-64bit-Mach-O",
+  "timings_seconds": {
+    "synthetic": 10.178642291924916,
+    "real": 15.034010458970442
+  },
+  "dataset_sha256": {
+    "blogData_train.csv": "f3cc953ea9913361be6d3bae2c393eef73eab57b1cb8e5bf8a22f1e5eb5dd05f",
+    "blogData_test-2012.03.31.01_00.csv": "fbb9791b1cd9ca6ceca27ff9db4d3aa5ef69258f19beb863fdc1103b961c711a"
+  },
+  "command": "python src/run_experiments.py "
+}
